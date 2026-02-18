@@ -1,0 +1,17 @@
+# Entornos virtuales
+venv/
+__pycache__/
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Outputs generados
+outputs/
+data/processed/
+
+# Notebooks temporales
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
