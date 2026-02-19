@@ -12,6 +12,11 @@ data/processed/
 
 # Notebooks temporales
 .ipynb_checkpoints/
+*.pyc
 
 # VS Code
 .vscode/
+
+#Entradas de fotos
+data/photo/
+
