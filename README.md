@@ -24,33 +24,7 @@ The current approach serves as a **classical baseline** and as an initial data g
 
 ## Project Structure
 
-human-silhouette-svg/
-│
-├── data/
-│ ├── raw/ # Imágenes originales
-│ ├── masks/ # Máscaras binarias (actuales o futuras)
-│ └── processed/ # Imágenes normalizadas
-│
-├── models/
-│ └── segmentation/ # Modelos y pesos (futuro: redes neuronales)
-│
-├── src/
-│ ├── init.py
-│ ├── preprocessing.py
-│ ├── segmentation.py
-│ ├── vectorization.py
-│ └── pipeline.py
-│
-├── outputs/
-│ ├── masks/ # Máscaras generadas
-│ └── svg/ # Siluetas SVG finales
-│
-├── notebooks/
-│ └── exploration.ipynb
-│
-├── README.md
-├── requirements.txt
-└── PROJECT_GOAL.md
+![estructura](F:\proyectos_independientes\human_silhouette_svg\structure\Conversión de foto a silueta SVG.png)
 
 ---
 

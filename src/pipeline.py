@@ -2,8 +2,8 @@ import os
 import cv2
 import numpy as np
 from segmentation import segment_foreground_grabcut
-from preprocessing import preprocess_for_segmentation
-from preprocessing import preprocess_for_ml 
+from preprocessing import preprocess_for_segmentation, preprocess_for_ml
+from hog_person_detector import detect_and_reframe_person
 from postprocessing import clean_mask
 from vectorization import extract_main_contour, contour_to_svg
 
@@ -31,11 +31,15 @@ def image_to_silhouette_svg(image_path: str, output_svg: str) -> None:
     Full pipeline: image -> silhouette SVG.
     """
     image = load_image(image_path)
-    image_pre = preprocess_for_segmentation(image, size=512)
+    image = preprocess_for_segmentation(image, size=512)
     
     os.makedirs("outputs/debug", exist_ok=True)
-    cv2.imwrite("outputs/debug/preprocessed.png", image_pre)
+    cv2.imwrite("outputs/debug/preprocessed.png", image)
     
+    image = detect_and_reframe_person(image)
+
+    cv2.imwrite("outputs/debug/center.png", image)
+
     mask = segment_foreground_grabcut(image)
     mask = clean_mask(mask)
 
@@ -45,7 +49,7 @@ def image_to_silhouette_svg(image_path: str, output_svg: str) -> None:
     contour_to_svg(contour, output_svg, canvas_size=(w, h))
 
 if __name__ == "__main__":
-    input_image = "data/photo/persona_2.jpg"
+    input_image = "data/photo/persona_6.jpg"
     output_svg = "outputs/svg/silhouette.svg"
     os.makedirs("outputs/svg", exist_ok=True)
 
