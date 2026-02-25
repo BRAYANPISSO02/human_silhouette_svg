@@ -1,11 +1,14 @@
 import cv2
 import numpy as np
 
-def clean_mask(mask: np.ndarray) -> np.ndarray:
+
+def clean_mask(mask: np.ndarray, kernel_size: int = 7) -> np.ndarray:
     """
-    Apply morphological operations to clean the mask.
+    Cleans a binary mask using morphological operations.
     """
-    kernel = np.ones((5, 5), np.uint8)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+
     return mask
