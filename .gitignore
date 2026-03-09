@@ -20,4 +20,5 @@ data/processed/
 #Entradas de fotos
 data/photo/
 structure
+model_u2net/u2net_human_seg
 
