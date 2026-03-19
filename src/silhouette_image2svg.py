@@ -41,11 +41,12 @@ def main():
         model_name + "_human_seg.pth",
     )
 
+    #Agregamos todas las rutas de todos lo archivos dentro de /photo a una lista 
     img_name_list = glob.glob(os.path.join(image_dir, "*"))
     print(img_name_list)
 
-    # --------- 2. dataloader ---------
-    # 1. dataloader
+    # -- Preparamos la "línea de producción" para la Red Neuronal --
+    
     test_salobj_dataset = SalObjDataset(
         img_name_list=img_name_list,
         lbl_name_list=[],
@@ -62,10 +63,11 @@ def main():
         print("...load U2NET---173.6 MB")
         net = U2NET(3, 1)
 
+    #Si hay una tarjeta de video NVIDIA potente (GPU), pasar todo para procesar más rapido 
     if torch.cuda.is_available():
         net.load_state_dict(torch.load(model_dir))
         net.cuda()
-    else:
+    else: #Sino mantengala con en la CPU (más lento pero funciona en cualquier pc) 
         net.load_state_dict(torch.load(model_dir, map_location="cpu"))
     net.eval()
 
@@ -123,6 +125,8 @@ def main():
         del d1, d2, d3, d4, d5, d6, d7
 
     # OBTENER DETALLES INTERNO DE PERSONAS
+
+    
 
 
 if __name__ == "__main__":
