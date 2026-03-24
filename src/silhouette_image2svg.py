@@ -11,12 +11,11 @@ from torchvision import transforms  # , utils
 import numpy as np
 from PIL import Image
 import glob
-import cv2
 
 from preprocessing import RescaleT
 from preprocessing import ToTensorLab
 from preprocessing import SalObjDataset
-from segmentation import normPRED, get_binary_mask, save_output
+from posprocessing import get_binary_mask 
 from vectorization import extract_main_contour, contour_to_svg
 
 
@@ -89,37 +88,8 @@ def main():
 
         d1, d2, d3, d4, d5, d6, d7 = net(inputs_test)
 
-        
         # --------- Normalización y mejora del mapa ---------
-        pred = d1[:, 0, :, :]  # mapa principal
-        pred = normPRED(pred)
-
-        # Pasar a numpy
-        pred_np = pred.cpu().data.numpy()[0]
-
-        # Suavizado (reduce ruido y mejora bordes)
-        pred_smooth = cv2.GaussianBlur(pred_np, (5, 5), 0)
-
-        # Normalización robusta (evita problemas numéricos)
-        pred_smooth = (pred_smooth - pred_smooth.min()) / (
-            pred_smooth.max() - pred_smooth.min() + 1e-8
-        )
-
-        # Leemos la imagen original para mantener tamaño
-        img_ori = io.imread(img_name_list[i_test])
-        h, w = img_ori.shape[:2]
-
-        # Redimensionar el mapa al tamaño original
-        pred_resized = cv2.resize(pred_smooth, (w, h))
-
-        # --------- Binarización mejorada ---------
-        threshold = 0.8  # más permisivo para conservar bordes
-        mask_binaria = (pred_resized > threshold).astype(np.uint8)
-        # print(
-        #     f"Máscara generada. Forma: {mask_binaria.shape}, Valores únicos: {np.unique(mask_binaria)}"
-        # )
-        # Aquí ya puedes usar 'mask_binaria' para lo que necesites
-        # -----------------------------------------
+        mask_binaria = get_binary_mask(d1, img_name_list[i_test], threshold=0.8)
 
         # (Opcional) Si aún quieres guardar el archivo visual:
         if not os.path.exists(prediction_dir):
