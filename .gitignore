@@ -22,3 +22,5 @@ data/photo/
 structure
 model_u2net/u2net_human_seg
 
+# Anything_Model
+segment_anything
