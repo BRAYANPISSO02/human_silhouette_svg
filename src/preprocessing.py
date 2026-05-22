@@ -1,15 +1,49 @@
 import  os
 import cv2
 import numpy as np
+import tkinter as tk
+from tkinter import filedialog
 from segment_anything import sam_model_registry, SamPredictor
+
+#Request a ticket
+# Ocultar ventana principal de tkinter
+root = tk.Tk()
+root.withdraw()
+
+# Abrir explorador de archivos
+INPUT_IMAGE = filedialog.askopenfilename(
+    title="Selecciona una imagen",
+    filetypes=[("Imágenes", "*.png *.jpg *.jpeg")]
+)
+if not INPUT_IMAGE:
+    print("No se seleccionó ninguna imagen.")
+    exit()
+
+# Cargar imagen
+image = cv2.imread(INPUT_IMAGE)
+if image is None:
+    print("Error al leer la imagen.")
+    exit()
+print("Imagen cargada:", INPUT_IMAGE)
+
+# OUTPUT
+OUTPUT_DIR = "data/input_segmentation/"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+filename = "foto.png"
+output_path = os.path.join(OUTPUT_DIR, filename)
+cv2.imwrite(output_path, image) 
+
 
 # Paths definition
 CHECKPOINT = "segment_anything\sam_vit_h_4b8939.pth"
-INPUT_IMAGE = "data/input_segmentation/primera.png"
-OUTPUT_IMAGE = "data/output_segmentation/primera.png"
+INPUT_IMAGE = "data/input_segmentation/foto.png"
+OUTPUT_IMAGE = "data/output_segmentation/foto.png"
 OUTPUT = "data/input_train/"
 OUTPUT_OUTPUT_IMAGE = "data/output_train/"
 os.makedirs(OUTPUT, exist_ok=True)
+
+save_index = 1
 
 #We imported the image
 image_bgr = cv2.imread(INPUT_IMAGE)
@@ -44,7 +78,15 @@ predictor.set_image(image_rgb)
 masks_stack = []  # key to undo
 mask_total = np.zeros(image_bgr.shape[:2], dtype=np.uint8)
 
-#reconstruction
+# convert number to name
+def number_to_name(n):
+    names = [
+        "primera", "segunda", "tercera", "cuarta", "quinta",
+        "sexta", "séptima", "octava", "novena", "décima"
+    ]
+    return names[n - 1] if n <= len(names) else f"imagen_{n}"
+
+# reconstruction
 def rebuild_mask():
     global mask_total
     mask_total = np.zeros_like(mask_total)
@@ -111,11 +153,17 @@ while True:
     # Pressing save
     elif key == ord('s'):
 
-        cv2.imwrite(f"{OUTPUT}mascara.png", mask_total)
+        name = number_to_name(save_index)
+        input_path = os.path.join(OUTPUT, f"{name}mask.png")
+        input_mask_path = os.path.join(OUTPUT, f"{name}.png")
+        output_path = os.path.join(OUTPUT_OUTPUT_IMAGE, f"{name}.png")
+        cv2.imwrite(input_path, mask_total)
         segmented = cv2.bitwise_and(image_bgr, image_bgr, mask=mask_total)
-        cv2.imwrite(f"{OUTPUT}primera.png", segmented)
-        cv2.imwrite(f"{OUTPUT_OUTPUT_IMAGE}primera.png", output_image_bgr)        
-        print("cropped image saved")
+        cv2.imwrite(input_mask_path, segmented)
+        cv2.imwrite(output_path, output_image_bgr)
+        print(f"Guardado: {name}")
+
+        save_index += 1     
 
     # Pressing go out
     elif key == 27:
