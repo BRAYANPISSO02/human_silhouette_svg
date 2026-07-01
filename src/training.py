@@ -17,6 +17,73 @@ EPOCHS     = 500
 LR         = 0.001
 SAVE_EVERY = 10    # save checkpoint every N epochs
 
+# DATASET DEFINITION
+
+class SilhouetteDataset(Dataset):
+    """
+    Dataset for training the U-Net.
+
+    Reads paired images from:
+        input_train/
+        output_train/
+
+    Each sample returns:
+        input_image  -> Tensor [3, 512, 512]
+        target_image -> Tensor [1, 512, 512]
+    """
+
+    def __init__(self,
+                 input_dir,
+                 output_dir,
+                 input_transform=None,
+                 output_transform=None):
+
+        self.input_dir = input_dir
+        self.output_dir = output_dir
+
+        self.input_transform = input_transform
+        self.output_transform = output_transform
+
+        # Read all image names and sort them
+        self.images = sorted([
+            file for file in os.listdir(input_dir)
+            if file.endswith(".png")
+        ])
+
+    def __len__(self):
+        """
+        Returns the number of image pairs.
+        """
+        return len(self.images)
+
+    def __getitem__(self, index):
+        """
+        Loads one input image and its corresponding target image.
+
+        Returns:
+            input_image  : Tensor [3,512,512]
+            target_image : Tensor [1,512,512]
+        """
+
+        # Image name
+        image_name = self.images[index]
+
+        # Complete paths
+        input_path = os.path.join(self.input_dir, image_name)
+        output_path = os.path.join(self.output_dir, image_name)
+
+        # Open images
+        input_image = Image.open(input_path)
+        target_image = Image.open(output_path)
+
+        # Apply transforms
+        if self.input_transform is not None:
+            input_image = self.input_transform(input_image)
+
+        if self.output_transform is not None:
+            target_image = self.output_transform(target_image)
+
+        return input_image, target_image
 
 # ARCHITECTURE U-NET
 
@@ -143,3 +210,4 @@ class UNet(nn.Module):
         return x
     
     # TRAINING LOOP
+
