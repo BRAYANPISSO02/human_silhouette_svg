@@ -68,7 +68,6 @@ Input Image (RGB)
 
 ### 1. Install dependencies
 
-```bash
 pip install -r requirements.txt
 
 ### 2. Place input image
@@ -143,3 +142,78 @@ industrial and creative applications
 
 Project in experimental / personal phase.
 License to be defined.
+
+
+
+# SERVICIOS DE AWS A USAR
+
+Fase 2 (aprender AWS)
+
+Cuando ya funcione.
+
+## Servicio 1: S3
+
+Aquí guardarías:
+
+s3://silhouette-project/
+
+dataset/
+models/
+results/
+
+Por ejemplo:
+
+dataset/
+ ├── input_train/
+ ├── output_train/
+
+models/
+ └── best_model.pth
+
+S3 será tu almacenamiento central.
+
+## Servicio 2: SageMaker
+
+Úsalo exclusivamente para entrenamiento.
+
+Dataset (S3)
+ ↓
+SageMaker Training
+ ↓
+best_model.pth
+ ↓
+S3
+
+Así aprendes:
+
+Jobs de entrenamiento.
+Manejo de datasets.
+Checkpoints.
+Model artifacts.
+
+Y puedes poner SageMaker en tu CV con fundamento.
+
+## Servicio 3: EC2 (mi recomendación)
+
+Aquí desplegaría el pipeline completo.
+
+EC2
+
+FastAPI
+SAM
+U-Net
+SVG
+
+Cuando llegue una imagen:
+
+Usuario
+ ↓
+FastAPI
+ ↓
+SAM
+ ↓
+U-Net
+ ↓
+SVG
+ ↓
+Respuesta
