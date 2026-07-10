@@ -3,19 +3,26 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
-from utils import input_transform, output_transform
+from .utils import input_transform, output_transform
 
 
-# CONFIGURATION
-INPUT_DIR  = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\data\input_train"
-OUTPUT_DIR = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\data\output_train"
+# CONFIGURATION PATHS
+TRAIN_INPUT_DIR  = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\data\input_train"
+TRAIN_OUTPUT_DIR = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\data\output_train"
+VALIDATION_INPUT_DIR  = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\data\input_val"
+VALIDATION_OUTPUT_DIR = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\data\output_val"
 CHECKPOINT_DIR = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\checkpoints"
+CHECKPOINT_PATH = os.path.join(
+    CHECKPOINT_DIR,
+    "checkpoint_epoch_100.pth"
+)
 
 IMG_SIZE   = 512
 BATCH_SIZE = 8
 EPOCHS     = 500
 LR         = 0.001
 SAVE_EVERY = 10    # save checkpoint every N epochs
+EARLY_STOPPING_PATIENCE = 8
 
 # DATASET DEFINITION
 
@@ -209,5 +216,309 @@ class UNet(nn.Module):
 
         return x
     
-    # TRAINING LOOP
+def train(
+    model,
+    train_loader,
+    validation_loader,
+    criterion,
+    optimizer,
+    scheduler,
+    device,
+    start_epoch=0
+):
+    """
+    Trains the U-Net model.
 
+    Args:
+        model: U-Net model.
+        train_loader: DataLoader containing the training batches.
+        criterion: Loss function.
+        optimizer: Optimizer used to update the weights.
+        device: CPU or GPU.
+    """
+
+    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+
+    best_validation_loss = float("inf")
+    epochs_without_improvement = 0
+
+    # Loop over all epochs
+    for epoch in range(start_epoch, EPOCHS):
+
+        # Put the model into training mode
+        model.train()
+        epoch_loss = 0.0
+
+        for inputs, targets in train_loader:
+            inputs = inputs.to(device)
+            targets = targets.to(device)
+
+            #Clean up iterations
+            optimizer.zero_grad()
+
+            # Forward pass
+            outputs = model(inputs)
+
+            # Loss funtion
+            loss = criterion(outputs, targets)
+
+            # Backward pass
+            loss.backward()
+
+            # Update weights
+            optimizer.step()
+            
+            # Accumulate loss for reporting
+            epoch_loss += loss.item()
+
+
+        average_loss = epoch_loss / len(train_loader)
+
+        validation_loss = validate(
+            model,
+            validation_loader,
+            criterion,
+            device
+        )
+
+        scheduler.step(validation_loss)
+
+        print(
+            f"Epoch {epoch+1}/{EPOCHS} | "
+            f"Train Loss: {average_loss:.6f} | "
+            f"Validation Loss: {validation_loss:.6f}"
+        )
+
+        if validation_loss < best_validation_loss:
+            best_validation_loss = validation_loss
+            epochs_without_improvement = 0
+            best_model_path = os.path.join(
+                CHECKPOINT_DIR,
+                "best_model.pth"
+            )
+            torch.save(
+                model.state_dict(),
+                best_model_path
+            )
+            print(f"New best model saved: {best_model_path}")
+
+        else:
+            epochs_without_improvement += 1
+
+        if epochs_without_improvement >= EARLY_STOPPING_PATIENCE:
+
+            print(
+                f"Early stopping triggered after {epoch + 1} epochs."
+            )
+            break
+
+        # Save checkpoint every SAVE_EVERY epochs
+        if (epoch + 1) % SAVE_EVERY == 0:
+
+            checkpoint_path = os.path.join(
+                CHECKPOINT_DIR,
+                f"checkpoint_epoch_{epoch+1}.pth"
+            )
+
+            torch.save(
+                {
+                    "epoch": epoch + 1,
+                    "model_state_dict": model.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                    "loss": average_loss
+                },
+                checkpoint_path
+            )
+            print(f"Checkpoint saved: {checkpoint_path}")   
+
+    # --------------------------------------------------
+    # Save final trained model
+    # --------------------------------------------------
+    final_model_path = os.path.join(
+        CHECKPOINT_DIR,
+        "model_final.pth"
+    )
+
+    torch.save(
+        model.state_dict(),
+        final_model_path
+    )
+    print(f"Final model saved: {final_model_path}")
+
+def load_checkpoint(
+    checkpoint_path,
+    model,
+    optimizer,
+    device
+):
+    """
+    Loads a training checkpoint.
+
+    Args:
+        checkpoint_path: Path to the checkpoint file.
+        model: U-Net model.
+        optimizer: Optimizer.
+        device: CPU or GPU.
+
+    Returns:
+        start_epoch: Epoch from which training should continue.
+    """
+
+    checkpoint = torch.load(
+        checkpoint_path,
+        map_location=device
+    )
+
+    model.load_state_dict(
+        checkpoint["model_state_dict"]
+    )
+
+    optimizer.load_state_dict(
+        checkpoint["optimizer_state_dict"]
+    )
+
+    start_epoch = checkpoint["epoch"]
+
+    print(f"Checkpoint loaded: {checkpoint_path}")
+    print(f"Resuming from epoch {start_epoch}")
+
+    return start_epoch
+
+def validate(
+    model,
+    validation_loader,
+    criterion,
+    device
+):
+    """
+    Evaluates the model on the validation dataset.
+
+    Args:
+        model: U-Net model.
+        validation_loader: DataLoader containing validation batches.
+        criterion: Loss function.
+        device: CPU or GPU.
+
+    Returns:
+        average_validation_loss
+    """
+    model.eval()  # Set model to evaluation mode
+    with torch.no_grad():  # Disable gradient computation
+        validation_loss = 0.0
+        for inputs, targets in validation_loader:
+            inputs = inputs.to(device)
+            targets = targets.to(device)
+            # Forward pass
+            outputs = model(inputs)
+            # Compute loss
+            loss = criterion(outputs, targets)
+            validation_loss += loss.item()
+    
+    average_validation_loss = validation_loss / len(validation_loader)
+    return average_validation_loss
+
+# Main definition
+def main():
+
+    # --------------------------------------------------
+    # Device
+    # --------------------------------------------------
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+
+    # --------------------------------------------------
+    # Training and Validation datasets 
+    # --------------------------------------------------
+    train_dataset = SilhouetteDataset(
+        input_dir = TRAIN_INPUT_DIR,
+        output_dir = TRAIN_OUTPUT_DIR,
+        input_transform = input_transform,
+        output_transform = output_transform
+    )
+    print(f"Training images: {len(train_dataset)}")
+
+    validation_dataset = SilhouetteDataset(
+        input_dir = VALIDATION_INPUT_DIR,
+        output_dir = VALIDATION_OUTPUT_DIR,
+        input_transform = input_transform,
+        output_transform = output_transform
+    )
+    print(f"Validation images: {len(validation_dataset)}")
+
+    # --------------------------------------------------
+    # Training and validation DataLoader
+    # --------------------------------------------------
+    train_loader = DataLoader(
+        dataset=train_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=0,
+        pin_memory=torch.cuda.is_available()
+    )
+
+    validation_loader = DataLoader(
+        dataset=validation_dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=torch.cuda.is_available()
+    )
+
+    # --------------------------------------------------
+    # Model
+    # --------------------------------------------------
+    model = UNet().to(device)
+
+    # --------------------------------------------------
+    # Loss function
+    # --------------------------------------------------
+    criterion = nn.L1Loss()
+
+    # --------------------------------------------------
+    # Optimizer
+    # --------------------------------------------------
+    optimizer = torch.optim.Adam(
+        model.parameters(),
+        lr=LR
+    )
+
+    # --------------------------------------------------
+    # Scheduler
+    # --------------------------------------------------
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=0.1,
+        patience=10
+    )
+
+    # --------------------------------------------------
+    # Load checkpoint (if it exists)
+    # --------------------------------------------------
+    start_epoch = 0
+
+    if os.path.exists(CHECKPOINT_PATH):
+        start_epoch = load_checkpoint(
+            CHECKPOINT_PATH,
+            model,
+            optimizer,
+            device
+        )
+
+    print("Training configuration created successfully.")
+
+    #train the model
+    train(
+        model,
+        train_loader,
+        validation_loader,
+        criterion,
+        optimizer,
+        scheduler,
+        device,
+        start_epoch
+
+    )
+
+if __name__ == "__main__":
+    main()

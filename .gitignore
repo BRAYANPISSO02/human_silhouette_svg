@@ -9,6 +9,7 @@ Thumbs.db
 # Outputs generados
 outputs/
 data/
+checkpoints/
 
 # Notebooks temporales
 .ipynb_checkpoints/
@@ -18,9 +19,11 @@ data/
 .vscode/
 
 #Entradas de fotos
-data/photo/
-model_u2net/u2net_human_seg/
+data/
+model_u2net/
 
 # Anything_Model
-segment_anything/sam_vit_h_4b8939.pth/
-yolov8n-seg.pt/
+segment_anything/
+yolov8n-seg.pt
+*.pth
+*.pt
