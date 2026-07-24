@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
+import re
 from .utils import input_transform, output_transform
 
 
@@ -12,10 +13,6 @@ TRAIN_OUTPUT_DIR = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhou
 VALIDATION_INPUT_DIR  = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\data\input_val"
 VALIDATION_OUTPUT_DIR = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\data\output_val"
 CHECKPOINT_DIR = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\checkpoints"
-CHECKPOINT_PATH = os.path.join(
-    CHECKPOINT_DIR,
-    "checkpoint_epoch_100.pth"
-)
 
 IMG_SIZE   = 512
 BATCH_SIZE = 8
@@ -345,6 +342,28 @@ def train(
     )
     print(f"Final model saved: {final_model_path}")
 
+def get_latest_checkpoint(checkpoint_dir):
+    """
+    Returns the latest checkpoint file based on the epoch number.
+    """
+
+    if not os.path.exists(checkpoint_dir):
+        return None
+
+    checkpoint_files = [
+        f for f in os.listdir(checkpoint_dir)
+        if f.startswith("checkpoint_epoch_") and f.endswith(".pth")
+    ]
+
+    if not checkpoint_files:
+        return None
+
+    checkpoint_files.sort(
+        key=lambda x: int(re.search(r"checkpoint_epoch_(\d+)", x).group(1))
+    )
+
+    return os.path.join(checkpoint_dir, checkpoint_files[-1])
+
 def load_checkpoint(
     checkpoint_path,
     model,
@@ -497,9 +516,11 @@ def main():
     # --------------------------------------------------
     start_epoch = 0
 
-    if os.path.exists(CHECKPOINT_PATH):
+    checkpoint_path = get_latest_checkpoint(CHECKPOINT_DIR)
+
+    if checkpoint_path is not None:
         start_epoch = load_checkpoint(
-            CHECKPOINT_PATH,
+            checkpoint_path,
             model,
             optimizer,
             device

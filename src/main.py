@@ -124,3 +124,11 @@
 
 # if __name__ == "__main__":
 #     main()
+
+
+from .preprocessing import load_image, load_sam
+
+predictor = load_sam()
+image = load_image(r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\data\input_val\imagen_73.png")
+
+print(image.shape)  
