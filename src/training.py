@@ -1,9 +1,12 @@
 import os
 import torch
 import torch.nn as nn
+import numpy as np
+import albumentations as A
+import re
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
-import re
+from torchvision.models import vgg19, VGG19_Weights
 from .utils import input_transform, output_transform
 
 
@@ -18,11 +21,26 @@ IMG_SIZE   = 512
 BATCH_SIZE = 8
 EPOCHS     = 500
 LR         = 0.001
-SAVE_EVERY = 10    # save checkpoint every N epochs
-EARLY_STOPPING_PATIENCE = 8
+SAVE_EVERY = 5    # save checkpoint every N epochs
+EARLY_STOPPING_PATIENCE = 5
+train_augmentation = A.Compose([
+    A.Rotate(limit=10, p=0.5),
+
+    A.Affine(
+        scale=(0.9, 1.1),
+        translate_percent=(-0.05, 0.05),
+        p=0.5
+    ),
+
+    A.RandomBrightnessContrast(
+        brightness_limit=0.15,
+        contrast_limit=0.15,
+        p=0.5
+    )
+])
+
 
 # DATASET DEFINITION
-
 class SilhouetteDataset(Dataset):
     """
     Dataset for training the U-Net.
@@ -40,13 +58,15 @@ class SilhouetteDataset(Dataset):
                  input_dir,
                  output_dir,
                  input_transform=None,
-                 output_transform=None):
+                 output_transform=None,
+                 augmentation=None):
 
         self.input_dir = input_dir
         self.output_dir = output_dir
 
         self.input_transform = input_transform
         self.output_transform = output_transform
+        self.augmentation = augmentation
 
         # Read all image names and sort them
         self.images = sorted([
@@ -77,10 +97,27 @@ class SilhouetteDataset(Dataset):
         output_path = os.path.join(self.output_dir, image_name)
 
         # Open images
-        input_image = Image.open(input_path)
-        target_image = Image.open(output_path)
+        input_image = Image.open(input_path).convert("RGB")
+        target_image = Image.open(output_path).convert("L")
 
-        # Apply transforms
+        # Convert PIL -> NumPy
+        input_image = np.array(input_image)
+        target_image = np.array(target_image)
+
+        # Apply data augmentation (if enabled)
+        if self.augmentation is not None:
+            augmented = self.augmentation(
+                image=input_image,
+                mask=target_image
+            )
+            input_image = augmented["image"]
+            target_image = augmented["mask"]
+
+        # Convert NumPy -> PIL
+        input_image = Image.fromarray(input_image)
+        target_image = Image.fromarray(target_image)
+
+        # Apply tensor transforms
         if self.input_transform is not None:
             input_image = self.input_transform(input_image)
 
@@ -159,7 +196,6 @@ class DecoderBlock(nn.Module):
         x = self.conv(x)
         return x
 
-
 class UNet(nn.Module):
     """
     U-Net for image-to-image translation.
@@ -212,7 +248,50 @@ class UNet(nn.Module):
         x = self.tanh(x)          #        values in [-1, 1]
 
         return x
-    
+
+# PERCEPTUAL LOSS
+class PerceptualLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+        vgg = vgg19(weights=VGG19_Weights.IMAGENET1K_V1).features
+        self.feature_extractor = nn.Sequential(
+            *list(vgg.children())[:16])
+        for param in self.feature_extractor.parameters():
+            param.requires_grad = False
+        self.feature_extractor.eval()
+        self.criterion = nn.L1Loss()
+        self.register_buffer(
+            "mean",
+            torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1))
+        self.register_buffer(
+            "std",
+            torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1))
+
+    def forward(self, prediction, target):
+        prediction = prediction.repeat(1, 3, 1, 1)
+        target = target.repeat(1, 3, 1, 1)
+        prediction = (prediction + 1.0) / 2.0
+        target = (target + 1.0) / 2.0
+        prediction = (prediction - self.mean) / self.std
+        target = (target - self.mean) / self.std
+        pred_features = self.feature_extractor(prediction)
+        target_features = self.feature_extractor(target)
+        loss = self.criterion(pred_features, target_features)
+        return loss
+
+class CombinedLoss(nn.Module):
+    def __init__(self, perceptual_weight=0.1):
+        super().__init__()
+        self.l1_loss = nn.L1Loss()
+        self.perceptual_loss = PerceptualLoss()
+        self.perceptual_weight = perceptual_weight
+
+    def forward(self, prediction, target):
+        l1 = self.l1_loss(prediction, target)
+        perceptual = self.perceptual_loss(prediction, target)
+        total_loss = l1 + self.perceptual_weight * perceptual
+        return total_loss
+
 def train(
     model,
     train_loader,
@@ -452,7 +531,8 @@ def main():
         input_dir = TRAIN_INPUT_DIR,
         output_dir = TRAIN_OUTPUT_DIR,
         input_transform = input_transform,
-        output_transform = output_transform
+        output_transform = output_transform,
+        augmentation=train_augmentation
     )
     print(f"Training images: {len(train_dataset)}")
 
@@ -460,7 +540,8 @@ def main():
         input_dir = VALIDATION_INPUT_DIR,
         output_dir = VALIDATION_OUTPUT_DIR,
         input_transform = input_transform,
-        output_transform = output_transform
+        output_transform = output_transform,
+        augmentation=None  # No augmentation for validation
     )
     print(f"Validation images: {len(validation_dataset)}")
 
@@ -491,7 +572,7 @@ def main():
     # --------------------------------------------------
     # Loss function
     # --------------------------------------------------
-    criterion = nn.L1Loss()
+    criterion = CombinedLoss(perceptual_weight=0.1).to(device)
 
     # --------------------------------------------------
     # Optimizer

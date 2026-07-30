@@ -39,13 +39,93 @@ def load_sam():
     predictor = SamPredictor(sam)
     return predictor
 
-def segment_person(image_bgr, predictor):
+def apply_mask(image_bgr, mask):
+    """
+    Applies the segmentation mask to the image.
+    Args:
+        image_bgr (numpy.ndarray):
+            Original image in BGR format.
+        mask (numpy.ndarray):
+            Binary mask where the person is 255 and the background is 0.
+    Returns:
+        numpy.ndarray:
+            Image with the background removed.
+    Raises:
+        ValueError: 
+            If no mask is provided.
+    """
+    if mask is None:
+        raise ValueError("Segmentation was cancelled.")
+    segmented = cv2.bitwise_and(
+        image_bgr,
+        image_bgr,
+        mask=mask
+    )
+    return segmented
 
+def resize_image(image_bgr):
+    """
+    Args:
+        image_bgr (numpy.ndarray):
+            Input image in BGR format.
+    Returns:
+        numpy.ndarray:
+            Resized image with dimensions TARGET_SIZE × TARGET_SIZE.
+    """
+    height, width = image_bgr.shape[:2]
+    scale = min(
+        TARGET_SIZE / width,
+        TARGET_SIZE / height
+    )
+    new_width = int(width * scale)
+    new_height = int(height * scale)
+    resized = cv2.resize(
+        image_bgr,
+        (new_width, new_height),
+        interpolation=cv2.INTER_AREA
+    )
+    canvas = np.zeros(
+        (TARGET_SIZE, TARGET_SIZE, 3),
+        dtype=np.uint8
+    )
+    x_offset = (TARGET_SIZE - new_width) // 2
+    y_offset = (TARGET_SIZE - new_height) // 2
+    canvas[
+        y_offset:y_offset + new_height,
+        x_offset:x_offset + new_width
+    ] = resized
+    return canvas
+
+def segment_person(image_bgr, predictor):
+    """
+    Controls:
+        - Left mouse button: Add a new segmentation region.
+        - Z: Undo the last selected region.
+        - S: Save the final mask and continue.
+        - Esc: Cancel the segmentation.
+    Args:
+        image_bgr (numpy.ndarray):
+            Input image in BGR format.
+        predictor (SamPredictor):
+            Initialized SAM predictor used to generate segmentation masks.
+    Returns:
+        numpy.ndarray:
+            Binary mask where the segmented person has value 255 and the
+            background has value 0.
+        None:
+            If the segmentation is cancelled by pressing the Esc key.
+    """
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     predictor.set_image(image_rgb)
     masks_stack = []
     mask_total = np.zeros(image_bgr.shape[:2], dtype=np.uint8)
     def rebuild_mask():
+        """
+        Rebuilds the final segmentation mask by combining all masks stored in the
+        stack and applying morphological operations.
+
+        The resulting mask is stored in the nonlocal variable `mask_total`.
+        """
         nonlocal mask_total
         mask_total = np.zeros_like(mask_total)
         for mask in masks_stack:
@@ -63,6 +143,21 @@ def segment_person(image_bgr, predictor):
         )
 
     def click_event(event, x, y, flags, param):
+        """
+        Args:
+            event (int):
+                OpenCV mouse event identifier.
+            x (int):
+                X-coordinate of the mouse click.
+            y (int):
+                Y-coordinate of the mouse click.
+            flags (int):
+                Additional event flags provided by OpenCV.
+            param (Any):
+                Optional user-defined data passed by OpenCV.
+        Returns:
+            None.
+        """
         if event != cv2.EVENT_LBUTTONDOWN:
             return
         input_point = np.array([[x, y]])
@@ -72,7 +167,6 @@ def segment_person(image_bgr, predictor):
             point_labels=input_label,
             multimask_output=True
         )
-
         mask = masks[np.argmax(scores)].astype(np.uint8) * 255
         kernel = np.ones((5, 5), np.uint8)
         mask = cv2.morphologyEx(
@@ -111,7 +205,21 @@ def segment_person(image_bgr, predictor):
 
 #MAIN FUNCTION
 def preprocess(image_path):
+    """
+    Preprocesses an input image before it is fed into the neural network.
 
+    The preprocessing pipeline consists of loading the image, interactively
+    segmenting the person using SAM, removing the background, resizing the
+    segmented image to the target resolution, converting it to RGB and PIL
+    format, and applying the input transformations required by the model.
+    Args:
+        image_path (str):
+            Path to the input image.
+    Returns:
+        torch.Tensor:
+            Preprocessed image tensor ready to be used as input to the neural
+            network.
+    """
     image_bgr = load_image(image_path)
     mask = segment_person(image_bgr, predictor)
     segmented = apply_mask(image_bgr, mask)
