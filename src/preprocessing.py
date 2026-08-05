@@ -183,8 +183,21 @@ def segment_person(image_bgr, predictor):
         rebuild_mask()
         cv2.imshow("Mask", mask_total)
 
+    # --------------------------------------------------
+    # Display windows with a reasonable size
+    # --------------------------------------------------
+    DISPLAY_SIZE = 800
+    h, w = image_bgr.shape[:2]
+    scale = min(DISPLAY_SIZE / w, DISPLAY_SIZE / h, 1.0)
+    display_width = int(w * scale)
+    display_height = int(h * scale)
+    cv2.namedWindow("Image", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("Mask", cv2.WINDOW_NORMAL)
+    cv2.resizeWindow("Image", display_width, display_height)
+    cv2.resizeWindow("Mask", display_width, display_height)
     cv2.imshow("Image", image_bgr)
     cv2.imshow("Mask", mask_total)
+    
     cv2.setMouseCallback(
         "Image",
         click_event
@@ -220,6 +233,7 @@ def preprocess(image_path):
             Preprocessed image tensor ready to be used as input to the neural
             network.
     """
+    predictor = load_sam()
     image_bgr = load_image(image_path)
     mask = segment_person(image_bgr, predictor)
     segmented = apply_mask(image_bgr, mask)
@@ -227,4 +241,4 @@ def preprocess(image_path):
     image_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
     image_pil = Image.fromarray(image_rgb)
     tensor = input_transform(image_pil)
-    return tensor
+    return tensor, resized
