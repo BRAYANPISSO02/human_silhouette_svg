@@ -1,4 +1,6 @@
+import sys
 import os
+from pathlib import Path
 import torch
 import torch.nn as nn
 import numpy as np
@@ -7,15 +9,33 @@ import re
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
 from torchvision.models import vgg19, VGG19_Weights
-from .utils import input_transform, output_transform
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-# CONFIGURATION PATHS
-TRAIN_INPUT_DIR  = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\data\input_train"
-TRAIN_OUTPUT_DIR = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\data\output_train"
-VALIDATION_INPUT_DIR  = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\data\input_val"
-VALIDATION_OUTPUT_DIR = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\data\output_val"
-CHECKPOINT_DIR = r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\checkpoints"
+try:
+    from .config import (
+        TRAIN_INPUT_DIR,
+        TRAIN_OUTPUT_DIR,
+        VALIDATION_INPUT_DIR,
+        VALIDATION_OUTPUT_DIR,
+        CHECKPOINTS_DIR,
+        BEST_MODEL_PATH,
+        FINAL_MODEL_PATH
+    )
+    from .utils import input_transform, output_transform
+except ImportError:
+    from src.config import (
+        TRAIN_INPUT_DIR,
+        TRAIN_OUTPUT_DIR,
+        VALIDATION_INPUT_DIR,
+        VALIDATION_OUTPUT_DIR,
+        CHECKPOINTS_DIR,
+        BEST_MODEL_PATH,
+        FINAL_MODEL_PATH
+    )
+    from src.utils import input_transform, output_transform
 
 IMG_SIZE   = 512
 BATCH_SIZE = 8
@@ -313,7 +333,7 @@ def train(
         device: CPU or GPU.
     """
 
-    os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+    CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
 
     best_validation_loss = float("inf")
     epochs_without_improvement = 0
@@ -368,13 +388,10 @@ def train(
         if validation_loss < best_validation_loss:
             best_validation_loss = validation_loss
             epochs_without_improvement = 0
-            best_model_path = os.path.join(
-                CHECKPOINT_DIR,
-                "best_model.pth"
-            )
+            best_model_path = BEST_MODEL_PATH
             torch.save(
                 model.state_dict(),
-                best_model_path
+                str(best_model_path)
             )
             print(f"New best model saved: {best_model_path}")
 
@@ -391,10 +408,7 @@ def train(
         # Save checkpoint every SAVE_EVERY epochs
         if (epoch + 1) % SAVE_EVERY == 0:
 
-            checkpoint_path = os.path.join(
-                CHECKPOINT_DIR,
-                f"checkpoint_epoch_{epoch+1}.pth"
-            )
+            checkpoint_path = CHECKPOINTS_DIR / f"checkpoint_epoch_{epoch+1}.pth"
 
             torch.save(
                 {
@@ -403,21 +417,18 @@ def train(
                     "optimizer_state_dict": optimizer.state_dict(),
                     "loss": average_loss
                 },
-                checkpoint_path
+                str(checkpoint_path)
             )
             print(f"Checkpoint saved: {checkpoint_path}")   
 
     # --------------------------------------------------
     # Save final trained model
     # --------------------------------------------------
-    final_model_path = os.path.join(
-        CHECKPOINT_DIR,
-        "model_final.pth"
-    )
+    final_model_path = FINAL_MODEL_PATH
 
     torch.save(
         model.state_dict(),
-        final_model_path
+        str(final_model_path)
     )
     print(f"Final model saved: {final_model_path}")
 
@@ -597,7 +608,7 @@ def main():
     # --------------------------------------------------
     start_epoch = 0
 
-    checkpoint_path = get_latest_checkpoint(CHECKPOINT_DIR)
+    checkpoint_path = get_latest_checkpoint(CHECKPOINTS_DIR)
 
     if checkpoint_path is not None:
         start_epoch = load_checkpoint(

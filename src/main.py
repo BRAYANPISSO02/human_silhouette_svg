@@ -1,16 +1,43 @@
-import torch
+import sys
 import os
+from pathlib import Path
+import torch
 import cv2
-
 from PIL import Image
 from tkinter import Tk
 from tkinter.filedialog import askopenfilename
-from .preprocessing import preprocess
-from .training import UNet
-from .postprocessing import postprocess
-from .vectorization import vectorize
 
-CHECKPOINT = (r"C:\Users\Laboratorio\Desktop\proyecto_siluetas\human_silhouette_svg\checkpoints\best_model.pth")
+# Add project root to sys.path so it can be run directly or as a module
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+try:
+    from .config import (
+        BEST_MODEL_PATH,
+        OUTPUT_PREPROCESSING_DIR,
+        OUTPUT_UNET_DIR,
+        OUTPUT_POSTPROCESSING_DIR,
+        OUTPUT_VECTORIZATION_DIR,
+        ensure_output_dirs
+    )
+    from .preprocessing import preprocess
+    from .training import UNet
+    from .postprocessing import postprocess
+    from .vectorization import vectorize
+except ImportError:
+    from src.config import (
+        BEST_MODEL_PATH,
+        OUTPUT_PREPROCESSING_DIR,
+        OUTPUT_UNET_DIR,
+        OUTPUT_POSTPROCESSING_DIR,
+        OUTPUT_VECTORIZATION_DIR,
+        ensure_output_dirs
+    )
+    from src.preprocessing import preprocess
+    from src.training import UNet
+    from src.postprocessing import postprocess
+    from src.vectorization import vectorize
 
 # Open browser to select image
 def select_image():
@@ -48,13 +75,7 @@ def main():
     """
 
     # Create output directories
-    for folder in [
-        "preprocessing",
-        "U_Net",
-        "postprocessing",
-        "vectorization"
-    ]:
-        os.makedirs(os.path.join("outputs", folder), exist_ok=True)
+    ensure_output_dirs()
 
     # Device used for inference
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -62,7 +83,10 @@ def main():
 
     # Create the model
     model = UNet().to(device)
-    model.load_state_dict(torch.load(CHECKPOINT, map_location=device))
+    if not BEST_MODEL_PATH.exists():
+        raise FileNotFoundError(f"No se encontró el checkpoint del modelo en: {BEST_MODEL_PATH}")
+
+    model.load_state_dict(torch.load(str(BEST_MODEL_PATH), map_location=device))
     model.eval()
     print("Pesos del modelo cargados correctamente.")
 
@@ -74,48 +98,35 @@ def main():
     input_tensor = input_tensor.unsqueeze(0).to(device)  # [1,3,512,512]
 
     # Save the preprocessed image
-    preprocessing_path = os.path.join(
-        "outputs",
-        "preprocessing",
-        f"{base_name}.png"
-    )
-    cv2.imwrite(preprocessing_path, preprocessed_image)
+    preprocessing_path = OUTPUT_PREPROCESSING_DIR / f"{base_name}.png"
+    cv2.imwrite(str(preprocessing_path), preprocessed_image)
     print(f"Preprocessing guardada en: {preprocessing_path}")
 
     # Inference
     with torch.no_grad():
         prediction = model(input_tensor)
-    print(prediction.shape)
+    print(f"Inference output shape: {prediction.shape}")
 
     # Save U-Net output
     unet_output = prediction.squeeze().detach().cpu().numpy()
     # Convert from [-1,1] to [0,255]
     unet_output = ((unet_output + 1.0) / 2.0) * 255.0
     unet_output = unet_output.clip(0, 255).astype("uint8")
-    unet_path = os.path.join(
-        "outputs",
-        "U_Net",
-        f"{base_name}.png")
-    Image.fromarray(unet_output).save(unet_path)
+    unet_path = OUTPUT_UNET_DIR / f"{base_name}.png"
+    Image.fromarray(unet_output).save(str(unet_path))
     print(f"U-Net guardada en: {unet_path}")
 
     # Postprocessing
     binary_image = postprocess(prediction)
 
     # Save postprocessing result
-    postprocessing_path = os.path.join(
-        "outputs",
-        "postprocessing",
-        f"{base_name}.png")
-    Image.fromarray(binary_image).save(postprocessing_path)
+    postprocessing_path = OUTPUT_POSTPROCESSING_DIR / f"{base_name}.png"
+    Image.fromarray(binary_image).save(str(postprocessing_path))
     print(f"Postprocessing guardado en: {postprocessing_path}")
 
     # Vectorization and save result
-    vectorization_path = os.path.join(
-        "outputs",
-        "vectorization",
-        f"{base_name}.svg")
-    svg_path = vectorize(binary_image, vectorization_path)
+    vectorization_path = OUTPUT_VECTORIZATION_DIR / f"{base_name}.svg"
+    svg_path = vectorize(binary_image, str(vectorization_path))
     print(f"SVG guardado en: {svg_path}")
 
 if __name__ == "__main__":

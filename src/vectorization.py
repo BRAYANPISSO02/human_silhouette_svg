@@ -1,12 +1,18 @@
+import sys
 import os
+from pathlib import Path
 import cv2
 import subprocess
 import numpy as np
 
-POTRACE_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    "bin",
-    "potrace.exe")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+try:
+    from .config import POTRACE_PATH
+except ImportError:
+    from src.config import POTRACE_PATH
 
 def find_contours(binary_image: np.ndarray):
     """
@@ -126,6 +132,9 @@ def vectorize(binary_image: np.ndarray, output_path: str):
     Applies Potrace smoothing and then runs the internal contour-based
     vectorization pipeline.
     """
+    if not POTRACE_PATH.exists():
+        raise FileNotFoundError(f"No se encontró el ejecutable de Potrace en: {POTRACE_PATH}")
+
     base_name = os.path.splitext(output_path)[0]
     temp_bmp = base_name + "_potrace_input.bmp"
     temp_pgm = base_name + "_potrace.pgm"
@@ -133,7 +142,7 @@ def vectorize(binary_image: np.ndarray, output_path: str):
     cv2.imwrite(temp_bmp, potrace_input)
     subprocess.run(
         [
-            POTRACE_PATH,
+            str(POTRACE_PATH),
             "--pgm",
             temp_bmp,
             "-o",

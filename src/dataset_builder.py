@@ -1,21 +1,44 @@
-import  os
+import sys
+import os
+from pathlib import Path
 import cv2
 import numpy as np
 import tkinter as tk
 from tkinter import filedialog, simpledialog
 from segment_anything import sam_model_registry, SamPredictor
-import json 
+import json
 
-STATE_FILE = "data/preprocessing_state.json"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+try:
+    from .config import (
+        STATE_FILE,
+        INPUT_SEG_DIR,
+        OUTPUT_SEG_DIR,
+        TRAIN_INPUT_DIR,
+        TRAIN_OUTPUT_DIR,
+        SAM_CHECKPOINT
+    )
+except ImportError:
+    from src.config import (
+        STATE_FILE,
+        INPUT_SEG_DIR,
+        OUTPUT_SEG_DIR,
+        TRAIN_INPUT_DIR,
+        TRAIN_OUTPUT_DIR,
+        SAM_CHECKPOINT
+    )
 
 def load_last_index():
-    if os.path.exists(STATE_FILE):
+    if STATE_FILE.exists():
         with open(STATE_FILE, "r") as f:
             return json.load(f).get("last_index", 0)
     return 0
 
 def save_last_index(index):
-    os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(STATE_FILE, "w") as f:
         json.dump({"last_index": index}, f)
 
@@ -75,25 +98,18 @@ if image is None:
     exit()
 print("Imagen cargada:", INPUT_IMAGE)
 
-# OUTPUT
-OUTPUT_DIR = "data/input_segmentation/"
-os.makedirs(OUTPUT_DIR, exist_ok=True)
-
+# OUTPUT INPUT SEGMENTATION
+INPUT_SEG_DIR.mkdir(parents=True, exist_ok=True)
 filename = f"foto{START_FROM}.png"
-output_path = os.path.join(OUTPUT_DIR, filename)
-cv2.imwrite(output_path, image)
-
-
-# Paths definition
-INPUT_IMAGE_DIR = "data/input_segmentation/"
-OUTPUT_IMAGE_DIR = "data/output_segmentation/"
+output_path = INPUT_SEG_DIR / filename
+cv2.imwrite(str(output_path), image)
 
 def load_image_pair(index):
-    input_path = os.path.join(INPUT_IMAGE_DIR, f"foto{index}.png")
-    output_path = os.path.join(OUTPUT_IMAGE_DIR, f"foto{index}.png")
+    input_path = INPUT_SEG_DIR / f"foto{index}.png"
+    output_path = OUTPUT_SEG_DIR / f"foto{index}.png"
     
-    img_input = cv2.imread(input_path)
-    img_output = cv2.imread(output_path)
+    img_input = cv2.imread(str(input_path))
+    img_output = cv2.imread(str(output_path))
     
     if img_input is None:
         print(f"No se encontró imagen de entrada: {input_path}")
@@ -107,19 +123,17 @@ def load_image_pair(index):
 
 image_bgr, output_image_bgr = load_image_pair(START_FROM)
 
-CHECKPOINT = "segment_anything\sam_vit_h_4b8939.pth"
-OUTPUT = "data/input_train/"
-OUTPUT_OUTPUT_IMAGE = "data/output_train/"
-os.makedirs(OUTPUT, exist_ok=True)
+TRAIN_INPUT_DIR.mkdir(parents=True, exist_ok=True)
+TRAIN_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Function to get the next save index based on existing files in the output directory
 def get_next_save_index(output_dir):
     i = 1
-    while os.path.exists(os.path.join(output_dir, f"imagen_{i}.png")):
+    while (output_dir / f"imagen_{i}.png").exists():
         i += 1
     return i
 
-save_index = get_next_save_index(OUTPUT)
+save_index = get_next_save_index(TRAIN_INPUT_DIR)
 
 # Adjust image to neural network input
 def resize_image(image_bgr):
@@ -142,7 +156,10 @@ image_bgr = resize_image(image_bgr)
 image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 
 # We load the model
-sam = sam_model_registry["vit_h"](checkpoint=CHECKPOINT)
+if not SAM_CHECKPOINT.exists():
+    raise FileNotFoundError(f"No se encontró el checkpoint de SAM en: {SAM_CHECKPOINT}")
+
+sam = sam_model_registry["vit_h"](checkpoint=str(SAM_CHECKPOINT))
 predictor = SamPredictor(sam)
 predictor.set_image(image_rgb)
 
@@ -150,7 +167,6 @@ predictor.set_image(image_rgb)
 masks_stack = []  # key to undo
 mask_total = np.zeros(image_bgr.shape[:2], dtype=np.uint8)
 
-# convert number to name
 # convert number to name
 def number_to_name(n):
     return f"imagen_{n}"
@@ -223,13 +239,13 @@ while True:
     elif key == ord('s'):
 
         name = number_to_name(save_index)
-        input_path = os.path.join(OUTPUT, f"{name}mask.png")
-        input_mask_path = os.path.join(OUTPUT, f"{name}.png")
-        output_path = os.path.join(OUTPUT_OUTPUT_IMAGE, f"{name}.png")
-        cv2.imwrite(input_path, mask_total)
+        input_path = TRAIN_INPUT_DIR / f"{name}mask.png"
+        input_mask_path = TRAIN_INPUT_DIR / f"{name}.png"
+        output_path = TRAIN_OUTPUT_DIR / f"{name}.png"
+        cv2.imwrite(str(input_path), mask_total)
         segmented = cv2.bitwise_and(image_bgr, image_bgr, mask=mask_total)
-        cv2.imwrite(input_mask_path, segmented)
-        cv2.imwrite(output_path, output_image_bgr)
+        cv2.imwrite(str(input_mask_path), segmented)
+        cv2.imwrite(str(output_path), output_image_bgr)
         print(f"Guardado: {name}")
 
         save_index += 1   
@@ -237,10 +253,6 @@ while True:
     
     elif key == 27:
         save_last_index(START_FROM)  # ← También guarda al salir
-        break  
-
-    # Pressing go out
-    elif key == 27:
         break
 
 cv2.destroyAllWindows()

@@ -1,16 +1,25 @@
-#IMPORTS
+import sys
+from pathlib import Path
 import cv2
 import numpy as np
 from PIL import Image
 from segment_anything import sam_model_registry, SamPredictor
 
-from.utils import input_transform
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
-#CONSTANTS
-CHECKPOINT = "segment_anything/sam_vit_h_4b8939.pth"
+try:
+    from .config import SAM_CHECKPOINT
+    from .utils import input_transform
+except ImportError:
+    from src.config import SAM_CHECKPOINT
+    from src.utils import input_transform
+
+# CONSTANTS
 TARGET_SIZE = 512
 
-#SECONDARY FUNCTIONS
+# SECONDARY FUNCTIONS
 def load_image(image_path):
     """
     Loads an image from disk.
@@ -35,7 +44,11 @@ def load_sam():
     Returns:
         SamPredictor: Initialized SAM predictor.
     """
-    sam = sam_model_registry["vit_h"](checkpoint=CHECKPOINT)
+    if not SAM_CHECKPOINT.exists():
+        raise FileNotFoundError(
+            f"Could not find SAM checkpoint at: {SAM_CHECKPOINT}"
+        )
+    sam = sam_model_registry["vit_h"](checkpoint=str(SAM_CHECKPOINT))
     predictor = SamPredictor(sam)
     return predictor
 
