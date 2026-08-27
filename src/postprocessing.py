@@ -21,15 +21,16 @@ def postprocess(prediction: torch.Tensor) -> np.ndarray:
         numpy.ndarray:
             Binary image with white foreground and black background.
     """
-        # --------------------------------------------------
+    # --------------------------------------------------
     # Tensor -> NumPy
+    # --------------------------------------------------
     gray = prediction.squeeze().detach().cpu().numpy()
 
     # [-1,1] -> [0,255]
     gray = ((gray + 1.0) / 2.0) * 255.0
     gray = np.clip(gray, 0, 255).astype(np.uint8)
 
-    # Estiramiento automático de contraste
+    # Automatic contrast stretching
     p1 = np.percentile(gray, 1)
     p99 = np.percentile(gray, 99)
     gray = gray.astype(np.float32)
@@ -37,41 +38,45 @@ def postprocess(prediction: torch.Tensor) -> np.ndarray:
     gray = np.clip(gray, 0, 1)
     gray = (gray * 255).astype(np.uint8)
 
-    # Binarización adaptativa
+    # Adaptive thresholding
     binary = cv2.adaptiveThreshold(
         gray,
         255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY,
         ADAPTATIVE_BLOCK_SIZE,
-        ADAPTATIVE_C)
+        ADAPTATIVE_C
+    )
 
-    # Eliminar componentes pequeñas
+    # Remove small noise components
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
         binary,
-        connectivity=8)
+        connectivity=8
+    )
     clean = np.zeros_like(binary)
     for i in range(1, num_labels):
         area = stats[i, cv2.CC_STAT_AREA]
         if area >= MIN_AREA:
             clean[labels == i] = 255
 
-    # Conectar líneas fragmentadas
+    # Connect fragmented strokes
     kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE,
-        MORPH_KERNEL_SIZE)
+        MORPH_KERNEL_SIZE
+    )
     clean = cv2.morphologyEx(
         clean,
         cv2.MORPH_CLOSE,
-        kernel)    
+        kernel
+    )
 
-    # Asegurar fondo negro y líneas blancas
+    # Ensure black background and white strokes
     if np.mean(clean) > 127:
         clean = 255 - clean
 
-    # Adelgazamiento (Skeleton)
+    # Thinning / Skeletonization
     if hasattr(cv2, "ximgproc"):
         clean = cv2.ximgproc.thinning(clean)
 
-    # Si ximgproc no está disponible, se devuelve la imagen limpia
+    # Return cleaned binary image
     return clean

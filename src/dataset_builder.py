@@ -57,7 +57,7 @@ def ask_start_index():
     entry = tk.Entry(dialog, font=("Arial", 12), justify="center", width=10)
     entry.pack(pady=6)
 
-    result = [next_auto]  # valor por defecto
+    result = [next_auto]  # Default value
 
     def on_continue():
         result[0] = next_auto
@@ -82,7 +82,7 @@ def ask_start_index():
 START_FROM = ask_start_index()
 print(f"Arrancando desde foto{START_FROM}.png")
 
-# Abrir explorador de archivos
+# Open file explorer
 INPUT_IMAGE = filedialog.askopenfilename(
     title="Selecciona una imagen",
     filetypes=[("Imágenes", "*.png *.jpg *.jpeg")]
@@ -91,7 +91,7 @@ if not INPUT_IMAGE:
     print("No se seleccionó ninguna imagen.")
     exit()
 
-# Cargar imagen
+# Load image
 image = cv2.imread(INPUT_IMAGE)
 if image is None:
     print("Error al leer la imagen.")
@@ -155,43 +155,42 @@ image_bgr = resize_image(image_bgr)
 
 image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
 
-# We load the model
+# Load SAM model
 if not SAM_CHECKPOINT.exists():
-    raise FileNotFoundError(f"No se encontró el checkpoint de SAM en: {SAM_CHECKPOINT}")
+    raise FileNotFoundError(f"SAM checkpoint not found at: {SAM_CHECKPOINT}")
 
 sam = sam_model_registry["vit_h"](checkpoint=str(SAM_CHECKPOINT))
 predictor = SamPredictor(sam)
 predictor.set_image(image_rgb)
 
 # Storage
-masks_stack = []  # key to undo
+masks_stack = []  # Stack for undo action
 mask_total = np.zeros(image_bgr.shape[:2], dtype=np.uint8)
 
-# convert number to name
+# Convert number to filename format
 def number_to_name(n):
     return f"imagen_{n}"
 
-# reconstruction
+# Mask reconstruction
 def rebuild_mask():
     global mask_total
     mask_total = np.zeros_like(mask_total)
 
-    for m in masks_stack: # It overlays all the masks stored in a bitwise "or" comparator 
-        # to leave a final one with all the active 1 parts.
+    for m in masks_stack: # Combine all masks with bitwise OR
         mask_total = cv2.bitwise_or(mask_total, m)
-    # global cleanup
-    kernel = np.ones((7,7), np.uint8)
+    # Global morphological cleaning
+    kernel = np.ones((7, 7), np.uint8)
     mask_total = cv2.morphologyEx(mask_total, cv2.MORPH_CLOSE, kernel)
     mask_total = cv2.morphologyEx(mask_total, cv2.MORPH_OPEN, kernel)
     
-# Click event
+# Mouse click event handler
 def click_event(event, x, y, flags, param):
     if event == cv2.EVENT_LBUTTONDOWN:
 
         input_point = np.array([[x, y]])
         input_label = np.array([1])
 
-		# We used the SAM predictor
+        # Predict segmentation mask with SAM
         masks, scores, _ = predictor.predict(
             point_coords=input_point,
             point_labels=input_label,
@@ -201,11 +200,11 @@ def click_event(event, x, y, flags, param):
         mask = masks[np.argmax(scores)].astype(np.uint8) * 255
 
         # Individual cleaning
-        kernel = np.ones((5,5), np.uint8)
+        kernel = np.ones((5, 5), np.uint8)
         mask_clean = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         mask_clean = cv2.morphologyEx(mask_clean, cv2.MORPH_OPEN, kernel)
 
-        # Save to stack
+        # Save to undo stack
         masks_stack.append(mask_clean)
 
         rebuild_mask()
@@ -213,7 +212,7 @@ def click_event(event, x, y, flags, param):
         cv2.imshow("Mask total", mask_total)
         print("Mask added")
 
-# Printing and function activation
+# Display window and callback registration
 cv2.imshow("Image", image_bgr)
 cv2.setMouseCallback("Image", click_event)
 
@@ -223,11 +222,11 @@ print("Z: Undo last")
 print("S: Save result")
 print("ESC: Go out")
 
-# Current reading
+# Main loop
 while True:
     key = cv2.waitKey(1) & 0xFF
 
-    # Pressing undo
+    # Undo action
     if key == ord('z'):
         if masks_stack:
             masks_stack.pop()
@@ -235,7 +234,7 @@ while True:
             cv2.imshow("Mask Total", mask_total)
             print("Last mask removed")
 
-    # Pressing save
+    # Save action
     elif key == ord('s'):
 
         name = number_to_name(save_index)
@@ -251,8 +250,9 @@ while True:
         save_index += 1   
         save_last_index(START_FROM)
     
+    # Exit action
     elif key == 27:
-        save_last_index(START_FROM)  # ← También guarda al salir
+        save_last_index(START_FROM)  # Save state on exit
         break
 
 cv2.destroyAllWindows()

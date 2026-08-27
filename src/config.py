@@ -13,6 +13,7 @@ DATA_DIR = PROJECT_ROOT / "data"
 CHECKPOINTS_DIR = PROJECT_ROOT / "checkpoints"
 OUTPUTS_DIR = PROJECT_ROOT / "outputs"
 BIN_DIR = PROJECT_ROOT / "bin"
+FRONTEND_DIR = PROJECT_ROOT / "frontend"
 
 # ==============================================================================
 # DATASET DIRECTORIES & FILES

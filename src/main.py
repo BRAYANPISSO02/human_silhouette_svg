@@ -1,5 +1,6 @@
 import sys
 import os
+import uuid
 from pathlib import Path
 import torch
 import cv2
@@ -21,7 +22,7 @@ try:
         OUTPUT_VECTORIZATION_DIR,
         ensure_output_dirs
     )
-    from .preprocessing import preprocess
+    from .preprocessing import preprocess, load_sam
     from .training import UNet
     from .postprocessing import postprocess
     from .vectorization import vectorize
@@ -34,32 +35,124 @@ except ImportError:
         OUTPUT_VECTORIZATION_DIR,
         ensure_output_dirs
     )
-    from src.preprocessing import preprocess
+    from src.preprocessing import preprocess, load_sam
     from src.training import UNet
     from src.postprocessing import postprocess
     from src.vectorization import vectorize
 
-# Open browser to select image
+def load_unet_model(device=None):
+    """
+    Loads the trained U-Net model from the checkpoint file.
+    """
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if not BEST_MODEL_PATH.exists():
+        raise FileNotFoundError(f"Model checkpoint not found at: {BEST_MODEL_PATH}")
+
+    model = UNet().to(device)
+    model.load_state_dict(torch.load(str(BEST_MODEL_PATH), map_location=device))
+    model.eval()
+    return model
+
+def run_pipeline(
+    image_input,
+    model=None,
+    predictor=None,
+    interactive=True,
+    save_intermediates=False,
+    base_name=None,
+    device=None
+):
+    """
+    Executes the full photo-to-SVG vectorization pipeline.
+    Reused by both the desktop CLI (interactive) and the web API (automatic).
+
+    Args:
+        image_input (str | Path | np.ndarray): Image path or decoded BGR array.
+        model (UNet, optional): Preloaded U-Net model.
+        predictor (SamPredictor, optional): Preloaded SAM predictor.
+        interactive (bool): Whether to show interactive OpenCV GUI.
+        save_intermediates (bool): Whether to save debug images to outputs/.
+        base_name (str, optional): Filename prefix for output files.
+        device (torch.device, optional): CPU or CUDA device.
+
+    Returns:
+        tuple (str, str): Path to generated SVG file and SVG file content string.
+    """
+    ensure_output_dirs()
+
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    if model is None:
+        model = load_unet_model(device)
+
+    if base_name is None:
+        if isinstance(image_input, (str, Path)):
+            base_name = Path(image_input).stem
+        else:
+            base_name = f"silhouette_{uuid.uuid4().hex[:8]}"
+
+    # Step 1: Preprocessing (SAM segmentation + letterboxing)
+    input_tensor, preprocessed_image = preprocess(
+        image_input,
+        predictor=predictor,
+        interactive=interactive
+    )
+    input_tensor = input_tensor.unsqueeze(0).to(device)
+
+    # Save intermediate preprocessing image if requested
+    if save_intermediates:
+        preprocessing_path = OUTPUT_PREPROCESSING_DIR / f"{base_name}.png"
+        cv2.imwrite(str(preprocessing_path), preprocessed_image)
+        print(f"Preprocessing saved to: {preprocessing_path}")
+
+    # Step 2: U-Net Inference
+    with torch.no_grad():
+        prediction = model(input_tensor)
+
+    # Save intermediate U-Net output if requested
+    if save_intermediates:
+        unet_output = prediction.squeeze().detach().cpu().numpy()
+        unet_output = ((unet_output + 1.0) / 2.0) * 255.0
+        unet_output = unet_output.clip(0, 255).astype("uint8")
+        unet_path = OUTPUT_UNET_DIR / f"{base_name}.png"
+        Image.fromarray(unet_output).save(str(unet_path))
+        print(f"U-Net output saved to: {unet_path}")
+
+    # Step 3: Postprocessing and Skeletonization
+    binary_image = postprocess(prediction)
+
+    if save_intermediates:
+        postprocessing_path = OUTPUT_POSTPROCESSING_DIR / f"{base_name}.png"
+        Image.fromarray(binary_image).save(str(postprocessing_path))
+        print(f"Postprocessing saved to: {postprocessing_path}")
+
+    # Step 4: Potrace Vectorization to SVG
+    vectorization_path = OUTPUT_VECTORIZATION_DIR / f"{base_name}.svg"
+    svg_path = vectorize(binary_image, str(vectorization_path))
+    print(f"SVG saved to: {svg_path}")
+
+    # Read SVG content
+    with open(svg_path, "r", encoding="utf-8") as f:
+        svg_content = f.read()
+
+    return str(svg_path), svg_content
+
 def select_image():
     """
-    Opens a file selection dialog and allows the user to choose an input image.
-    The selected image path is returned and later used as the input of the
-    preprocessing pipeline.
-    Returns:
-        str:
-            Absolute path of the selected image file.
-    Raises:
-        ValueError:
-            If no image is selected and the dialog is closed or cancelled.
+    Opens a file selection dialog to choose an input image for desktop mode.
     """
     root = Tk()
-    root.withdraw()  # Oculta la ventana principal
+    root.withdraw()  # Hide main window
     root.attributes("-topmost", True)
     image_path = askopenfilename(
         title="Seleccionar imagen",
         filetypes=[
             ("Imágenes", "*.png *.jpg *.jpeg *.bmp"),
-            ("Todos los archivos", "*.*")])
+            ("Todos los archivos", "*.*")
+        ]
+    )
     root.destroy()
     if not image_path:
         raise ValueError("No se seleccionó ninguna imagen.")
@@ -67,67 +160,10 @@ def select_image():
 
 def main():
     """
-    Executes the complete human silhouette generation pipeline.
-
-    The pipeline includes image selection, preprocessing, U-Net inference,
-    postprocessing, vectorization, and saving the outputs generated at each
-    stage.
+    Desktop entry point: Selects an image with Tkinter and executes the pipeline with GUI.
     """
-
-    # Create output directories
-    ensure_output_dirs()
-
-    # Device used for inference
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
-
-    # Create the model
-    model = UNet().to(device)
-    if not BEST_MODEL_PATH.exists():
-        raise FileNotFoundError(f"No se encontró el checkpoint del modelo en: {BEST_MODEL_PATH}")
-
-    model.load_state_dict(torch.load(str(BEST_MODEL_PATH), map_location=device))
-    model.eval()
-    print("Pesos del modelo cargados correctamente.")
-
-    # Load and preprocess the input image
     image_path = select_image()
-    # Base name used for all output files
-    base_name = os.path.splitext(os.path.basename(image_path))[0]
-    input_tensor, preprocessed_image = preprocess(image_path)
-    input_tensor = input_tensor.unsqueeze(0).to(device)  # [1,3,512,512]
-
-    # Save the preprocessed image
-    preprocessing_path = OUTPUT_PREPROCESSING_DIR / f"{base_name}.png"
-    cv2.imwrite(str(preprocessing_path), preprocessed_image)
-    print(f"Preprocessing guardada en: {preprocessing_path}")
-
-    # Inference
-    with torch.no_grad():
-        prediction = model(input_tensor)
-    print(f"Inference output shape: {prediction.shape}")
-
-    # Save U-Net output
-    unet_output = prediction.squeeze().detach().cpu().numpy()
-    # Convert from [-1,1] to [0,255]
-    unet_output = ((unet_output + 1.0) / 2.0) * 255.0
-    unet_output = unet_output.clip(0, 255).astype("uint8")
-    unet_path = OUTPUT_UNET_DIR / f"{base_name}.png"
-    Image.fromarray(unet_output).save(str(unet_path))
-    print(f"U-Net guardada en: {unet_path}")
-
-    # Postprocessing
-    binary_image = postprocess(prediction)
-
-    # Save postprocessing result
-    postprocessing_path = OUTPUT_POSTPROCESSING_DIR / f"{base_name}.png"
-    Image.fromarray(binary_image).save(str(postprocessing_path))
-    print(f"Postprocessing guardado en: {postprocessing_path}")
-
-    # Vectorization and save result
-    vectorization_path = OUTPUT_VECTORIZATION_DIR / f"{base_name}.svg"
-    svg_path = vectorize(binary_image, str(vectorization_path))
-    print(f"SVG guardado en: {svg_path}")
+    run_pipeline(image_path, interactive=True, save_intermediates=True)
 
 if __name__ == "__main__":
     main()
