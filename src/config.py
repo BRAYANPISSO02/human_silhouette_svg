@@ -1,3 +1,4 @@
+import shutil
 from pathlib import Path
 
 # ==============================================================================
@@ -33,7 +34,8 @@ STATE_FILE = DATA_DIR / "preprocessing_state.json"
 BEST_MODEL_PATH = CHECKPOINTS_DIR / "best_model.pth"
 FINAL_MODEL_PATH = CHECKPOINTS_DIR / "model_final.pth"
 SAM_CHECKPOINT = PROJECT_ROOT / "segment_anything" / "sam_vit_h_4b8939.pth"
-POTRACE_PATH = BIN_DIR / "potrace.exe"
+_system_potrace = shutil.which("potrace")
+POTRACE_PATH = Path(_system_potrace) if _system_potrace else BIN_DIR / "potrace.exe"
 
 # ==============================================================================
 # OUTPUT DIRECTORIES
