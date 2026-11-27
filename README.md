@@ -1,346 +1,249 @@
-# AI Vectorizer Pro — Human Silhouette SVG Generator
+# Human Silhouette SVG
 
-Sistema integral de visión por computadora y Deep Learning para la extracción y vectorización automática de siluetas humanas en formato **SVG (Scalable Vector Graphics)** a partir de fotografías reales.
+Pipeline de visión por computadora para convertir fotografías reales de personas en siluetas vectoriales en formato **SVG** listas para corte/grabado láser, rotulación o edición vectorial.
 
-El proyecto implementa un pipeline híbrido de múltiples etapas que combina **Segment Anything Model (SAM)** de Meta para la segmentación de sujetos, una **red neuronal convolucional U-Net personalizada** con funciones de pérdida perceptuales para la generación de siluetas y arte de líneas (*line-art*), filtros morfológicos avanzados y vectorización basada en **Potrace** y simplificación de contornos geométricos.
-
-Incluye tanto una **aplicación web moderna (FastAPI + SPA en Tailwind CSS)** como una **herramienta de escritorio interactiva**, un generador asistido de datasets y un entorno completo de entrenamiento en PyTorch.
+El problema de fondo no se resuelve bien aplicando un detector de bordes clásico (Canny/Sobel) ni vectorizando una fotografía directamente con Potrace: las texturas de ropa, sombras y fondos complejos generan miles de trazos irrelevantes. Para resolverlo, el proyecto descompone la tarea en cuatro etapas: segmentación de la persona con **SAM (ViT-H)**, traducción imagen-a-trazo mediante una **U-Net** entrenada con pérdida L1 + perceptual (VGG-19), limpieza morfológica con esqueletización y conversión final a rutas SVG.
 
 ---
 
-## Tabla de Contenidos
-1. [Características Principales](#características-principales)
-2. [Arquitectura del Pipeline](#arquitectura-del-pipeline)
-   - [Paso 1: Preprocesamiento y Segmentación (SAM)](#paso-1-preprocesamiento-y-segmentación-sam)
-   - [Paso 2: Inferencia de Silueta con U-Net](#paso-2-inferencia-de-silueta-con-u-net)
-   - [Paso 3: Postprocesamiento y Esqueletización](#paso-3-postprocesamiento-y-esqueletización)
-   - [Paso 4: Suavizado y Vectorización SVG](#paso-4-suavizado-y-vectorización-svg)
-3. [Módulos y Herramientas del Proyecto](#módulos-y-herramientas-del-proyecto)
-   - [Servidor Web y API REST (`src/api.py` + `frontend/`)](#1-servidor-web-y-api-rest-srcapipy--frontend)
-   - [Pipeline de Escritorio Interactivo (`src/main.py`)](#2-pipeline-de-escritorio-interactivo-srcmainpy)
-   - [Generador Asistido de Dataset (`src/dataset_builder.py`)](#3-generador-asistido-de-dataset-srcdataset_builderpy)
-   - [Pipeline de Entrenamiento (`src/training.py`)](#4-pipeline-de-entrenamiento-srctrainingpy)
-   - [Modelos Adicionales de Soporte](#5-modelos-adicionales-de-soporte)
-4. [Estructura del Proyecto](#estructura-del-proyecto)
-5. [Instalación y Requisitos](#instalación-y-requisitos)
-   - [Requisitos Previos](#requisitos-previos)
-   - [Instalación de Dependencias](#instalación-de-dependencias)
-   - [Pesos y Checkpoints Requeridos](#pesos-y-checkpoints-requeridos)
-6. [Guía de Ejecución](#guía-de-ejecución)
-   - [1. Levantar el Servicio Web](#1-levantar-el-servicio-web)
-   - [2. Ejecutar la Aplicación de Escritorio](#2-ejecutar-la-aplicación-de-escritorio)
-   - [3. Construir Dataset de Pares](#3-construir-dataset-de-pares)
-   - [4. Entrenar la Red U-Net](#4-entrenar-la-red-u-net)
-7. [Proyección de Despliegue en la Nube (AWS)](#proyección-de-despliegue-en-la-nube-aws)
+## Arquitectura del pipeline
 
----
+El flujo principal vive en `src/main.py` (`run_pipeline`) y se reutiliza tanto en el modo de escritorio interactivo como en la API web:
 
-## Características Principales
-
-- **Segmentación Robusta con SAM**: Aislamiento del sujeto respecto a fondos complejos utilizando Segment Anything (`vit_h`), operable en modo interactivo asistido por el usuario (OpenCV GUI) o en modo totalmente automático (mediante puntos clave heurísticos).
-- **Traducción Imagen-a-Silueta mediante U-Net**: Modelo U-Net entrenado para traducir fotos RGB segmentadas (512×512) a mapas continuos de silueta y trazos.
-- **Entrenamiento con Pérdida Perceptual (VGG-19)**: Optimización guiada por una función de pérdida combinada (`L1Loss` + `PerceptualLoss` con características profundas de VGG-19 preentrenada), preservando la coherencia estructural y los bordes humanos.
-- **Postprocesamiento Morfológico Riguroso**: Normalización adaptativa por percentiles, umbralizado adaptativo gaussiano, filtrado de componentes conexas por área mínima (`MIN_AREA = 25`), cierre morfológico y adelgazamiento de trazo (*skeletonization / thinning*).
-- **Salida Vectorial SVG Optimizada**: Curvas suavizadas con Potrace y simplificadas geométricamente con el algoritmo de Douglas-Peucker (`cv2.approxPolyDP`), generando rutas SVG limpias (`M`, `L`, `Z`) ideales para grabado/corte láser, rotulación o ilustración digital.
-- **Doble Modo de Operación**:
-  - **Web SPA**: Interfaz en Tailwind CSS con drag & drop, previsualización en tiempo real y descarga directa del archivo `.svg`.
-  - **Desktop GUI**: Interfaz con Tkinter y OpenCV para control fino manual sobre la máscara de segmentación.
-
----
-
-## Arquitectura del Pipeline
-
-El flujo de procesamiento unificado (`src/main.py` -> `run_pipeline`) consta de cuatro etapas deterministas y reproducibles:
-
-```
-Imagen de Entrada (RGB)
-        │
-        ▼
-[ Paso 1: Preprocesamiento & Segmentación SAM ]
-  ├─ Detección / Selección de Persona (SAM ViT-H)
-  ├─ Extracción por máscara binaria (Bitwise AND)
-  ├─ Redimensionamiento con Letterbox (512×512)
-  └─ Normalización a Tensor [-1.0, 1.0]
-        │
-        ▼
-[ Paso 2: Inferencia de Silueta (U-Net) ]
-  ├─ Red Neuronal U-Net (Encoder-Decoder con Skip Connections)
-  └─ Salida con activación Tanh (tensor 1×512×512 en [-1.0, 1.0])
-        │
-        ▼
-[ Paso 3: Postprocesamiento & Morfología ]
-  ├─ Estiramiento de contraste por percentiles (p1 - p99)
-  ├─ Binarización adaptativa gaussiana
-  ├─ Filtrado de ruido por componentes conexas (área >= 25 px)
-  ├─ Cierre morfológico elíptico (3×3)
-  └─ Esqueletización / Adelgazamiento (cv2.ximgproc.thinning)
-        │
-        ▼
-[ Paso 4: Vectorización SVG ]
-  ├─ Pre-suavizado con Potrace (binario externo)
-  ├─ Extracción de contornos (cv2.findContours)
-  ├─ Filtrado por área mínima (área >= 8.0)
-  ├─ Simplificación poligonal Douglas-Peucker (approxPolyDP)
-  └─ Generación y serialización del archivo SVG (<svg><path d="..."/></svg>)
+```text
+Foto RGB (archivo o buffer)
+   │
+   ▼
+1. Preprocesamiento (src/preprocessing.py)
+   ├─ Segmentación del sujeto con SAM (ViT-H): manual por clics o automática
+   ├─ Aislamiento sobre fondo negro (bitwise AND)
+   ├─ Letterbox proporcional a 512x512
+   └─ Normalización a tensor [3, 512, 512] en [-1, 1]
+   │
+   ▼
+2. Inferencia de trazos (UNet en src/training.py)
+   ├─ Encoder-Decoder simétrico (64 → 128 → 256 → 512 → 1024) con skip connections
+   └─ Salida continua [1, 512, 512] en [-1, 1] (activación Tanh)
+   │
+   ▼
+3. Postprocesamiento (src/postprocessing.py)
+   ├─ Estiramiento de contraste por percentiles (p1 - p99)
+   ├─ Umbralizado adaptativo gaussiano (block_size=31, C=-5)
+   ├─ Filtrado de componentes conexas (área >= 25 px)
+   ├─ Cierre morfológico elíptico (3x3)
+   └─ Esqueletización / thinning (cv2.ximgproc.thinning)
+   │
+   ▼
+4. Vectorización (src/vectorization.py)
+   ├─ Suavizado raster mediante Potrace (--pgm)
+   ├─ Extracción de contornos (cv2.findContours) y filtrado (área >= 8.0)
+   ├─ Simplificación poligonal Douglas-Peucker (epsilon = 0.0015 * perímetro)
+   └─ Exportación de <svg> con trazados (M, L, Z)
 ```
 
-### Paso 1: Preprocesamiento y Segmentación (SAM)
-- **Carga de imagen**: Lee desde ruta en disco o desde un buffer en memoria (`cv2.imdecode`).
-- **Segmentación**:
-  - *Modo interactivo*: Abre ventana OpenCV permitiendo clics para incluir regiones, tecla `Z` para deshacer (*undo*), tecla `S` para confirmar y `ESC` para cancelar.
-  - *Modo automático*: Inyecta puntos guía estratégicos (centro y tercios verticales de la imagen) y selecciona la máscara con el mayor puntaje de confianza.
-- **Letterboxing**: Escala proporcionalmente la imagen segmentada manteniendo la relación de aspecto dentro de un lienzo de 512×512 píxeles con fondo neutro.
-- **Transformación**: Convierte a RGB, tensor PyTorch y normaliza a valores entre -1 y 1 (`mean=[0.5, 0.5, 0.5]`, `std=[0.5, 0.5, 0.5]`).
+---
 
-### Paso 2: Inferencia de Silueta con U-Net
-- **Arquitectura U-Net**:
-  - **Encoder**: 4 bloques descendentes dobles (Conv3x3 + BatchNorm + ReLU) seguidos de MaxPooling (512×512 → 256×256 → 128×128 → 64×64 → 32×32) con canales progresivos (64 → 128 → 256 → 512).
-  - **Cuello de Botella (Bottleneck)**: Bloque convolucional profundo de 1024 canales en resolución 32×32.
-  - **Decoder**: 4 bloques ascendentes con convoluciones transpuestas (`ConvTranspose2d`), concatenación de *skip connections* del encoder y bloques de convolución doble (canales 512 → 256 → 128 → 64).
-  - **Capa de Salida**: Convolución 1×1 y activación `Tanh`, entregando un tensor de 1 canal en escala `[-1, 1]` que define la silueta.
-- Los pesos se cargan automáticamente desde `checkpoints/best_model.pth`.
+## Decisiones técnicas
 
-### Paso 3: Postprocesamiento y Esqueletización
-- **Normalización**: Escala el tensor a NumPy `uint8` en el rango `[0, 255]`.
-- **Contraste Dinámico**: Ajuste automático de brillo/contraste usando los percentiles 1% y 99%.
-- **Binarización**: Umbralizado adaptativo gaussiano con tamaño de bloque 31 y constante C = -5.
-- **Limpieza de Ruido**: Análisis de componentes conexas de 8 vecinos para eliminar artefactos aislados menores a 25 píxeles de área.
-- **Refinamiento Morfológico**: Cierre morfológico con kernel elíptico para consolidar líneas interrumpidas.
-- **Thinning**: Aplicación de algoritmo de adelgazamiento (esqueletización) de OpenCV para garantizar trazos de un solo píxel de ancho.
-
-### Paso 4: Suavizado y Vectorización SVG
-- **Potrace**: Invoca el binario de Potrace para suavizar curvas continuas a partir del mapa de bits procesado.
-- **Extracción de Contornos**: Detección jerárquica con `cv2.findContours`.
-- **Filtrado y Simplificación**:
-  - Se descartan contornos con área menor a 8.0.
-  - Se simplifican las polilíneas mediante `cv2.approxPolyDP` con épsilon adaptativo relativo al perímetro ($\epsilon = 0.0015 \times \text{perímetro}$).
-- **Escritura SVG**: Construcción directa de instrucciones vectoriales (`M`, `L`, `Z`) dentro de un elemento `<svg>` con `viewBox` acorde a la resolución original y estilos listos para renderizado o corte láser.
+- **Separar segmentación y generación de silueta (SAM + U-Net):** entrenar una U-Net directa desde fotos sin recortar exige un volumen de datos alto para que aprenda a ignorar fondos arbitrarios. Al usar SAM ViT-H como etapa previa para eliminar el fondo, la U-Net solo necesita aprender la correspondencia entre persona recortada y trazo, lo que permitió entrenar con un dataset propio reducido (72 pares en entrenamiento).
+- **Letterboxing a 512x512 en lugar de resize directo:** mantener la relación de aspecto rellenando con fondo negro evita deformar proporciones corporales entre fotos verticales y horizontales.
+- **Pérdida combinada (`L1 + 0.1 * PerceptualLoss`):** entrenar solo con L1 o MSE en tareas de *line-art* tiende a difuminar o romper líneas finas cuando existe un desplazamiento mínimo respecto al target. Agregar una pérdida perceptual sobre las primeras 16 capas congeladas de VGG-19 (pesos `IMAGENET1K_V1`) penaliza diferencias estructurales y mejora la continuidad del trazo.
+- **Postprocesamiento clásico antes de vectorizar:** la salida de la U-Net es un mapa continuo en `[-1, 1]`, no una máscara binaria limpia. La combinación de normalización por percentiles, umbral adaptativo, limpieza por área y *thinning* estandariza el grosor del trazo a 1 píxel antes de pasar por Potrace y `approxPolyDP`.
+- **Herramienta propia de etiquetado (`src/dataset_builder.py`):** al no contar con un dataset público que encajara con el estilo de trazo buscado, se construyó una utilidad con Tkinter + OpenCV + SAM para generar pares alineados y persistir el progreso en `data/preprocessing_state.json`.
 
 ---
 
-## Módulos y Herramientas del Proyecto
+## Modelo y entrenamiento
 
-### 1. Servidor Web y API REST (`src/api.py` + `frontend/`)
-Backend desarrollado con **FastAPI** que aloja el servicio de inferencia en tiempo real y sirve la interfaz web:
-- **Carga de Modelos en Memoria**: Inicializa SAM (`vit_h`) y U-Net en GPU (si CUDA está disponible) o CPU al arrancar el servidor, evitando latencia por recarga de modelos.
-- **Endpoint `POST /api/vectorize`**:
-  - Recibe un archivo de imagen en formato multiparte (`UploadFile`).
-  - Ejecuta el pipeline en modo automático (sin GUI de escritorio).
-  - Devuelve una respuesta JSON con el estado, el nombre del archivo y el código SVG serializado:
-    ```json
-    {
-      "status": "success",
-      "filename": "silhouette_a1b2c3d4.svg",
-      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" ... </svg>"
-    }
-    ```
-- **Frontend SPA (`frontend/index.html`, `frontend/app.js`)**:
-  - Diseño responsivo y moderno basado en Tailwind CSS.
-  - Zona de arrastrar y soltar (*drag & drop*) de imágenes (JPG, PNG, WEBP).
-  - Vista comparativa en dos columnas: previsualización de la foto original vs. visualizador SVG interactivo.
-  - Botón de descarga directa del SVG (`silueta_vectorial.svg`).
-  - Botón para reiniciar la interfaz y procesar nuevas imágenes.
+Todo el flujo de entrenamiento está en `src/training.py`.
 
-### 2. Pipeline de Escritorio Interactivo (`src/main.py`)
-Punto de entrada para uso local interactivo:
-- Diálogo gráfico con **Tkinter** para seleccionar la imagen de entrada desde el explorador de archivos.
-- Permite la segmentación manual asistida por SAM en ventana OpenCV.
-- Guarda opcionalmente las etapas intermedias de depuración en:
-  - `outputs/preprocessing/`
-  - `outputs/U_Net/`
-  - `outputs/postprocessing/`
-  - `outputs/vectorization/` (archivo SVG final)
+### Arquitectura U-Net
 
-### 3. Generador Asistido de Dataset (`src/dataset_builder.py`)
-Herramienta diseñada para acelerar la construcción y curación de pares de imágenes para el entrenamiento de la U-Net:
-- Diálogo interactivo para continuar desde el último índice guardado (persistido en `data/preprocessing_state.json`) o elegir un número personalizado.
-- Carga de imágenes de entrada desde `data/input_segmentation/` o explorador de archivos.
-- Segmentación con SAM por clics (`clic izquierdo`: agregar región, `Z`: deshacer, `S`: guardar par procesado, `ESC`: salir guardando estado).
-- Exporta de forma organizada a:
-  - `data/input_train/imagen_X.png` (imagen recortada y con letterbox 512×512)
-  - `data/output_train/imagen_X.png` (máscara / arte de línea objetivo)
+| Bloque | Operación | Canales | Resolución espacial |
+| :--- | :--- | :---: | :---: |
+| Encoder (x4) | `2x (Conv3x3 → BatchNorm → ReLU)` + `MaxPool2d(2)` | `3 → 64 → 128 → 256 → 512` | `512 → 32` |
+| Bottleneck | `2x (Conv3x3 → BatchNorm → ReLU)` | `512 → 1024` | `32x32` |
+| Decoder (x4) | `ConvTranspose2d(2)` + `concat(skip)` + `ConvBlock` | `1024 → 512 → 256 → 128 → 64` | `32 → 512` |
+| Salida | `Conv1x1` + `Tanh` | `64 → 1` | `512x512` |
 
-### 4. Pipeline de Entrenamiento (`src/training.py`)
-Módulo de entrenamiento completo con PyTorch:
-- **Dataset (`SilhouetteDataset`)**: Empareja imágenes RGB con sus respectivas imágenes objetivo en escala de grises.
-- **Data Augmentation (`albumentations`)**:
-  - Rotaciones aleatorias (`limit=10, p=0.5`).
-  - Transformaciones afines (`scale=(0.9, 1.1)`, `translate_percent=(-0.05, 0.05)`).
-  - Variaciones aleatorias de brillo y contraste (`limit=0.15, p=0.5`).
-- **Función de Pérdida (`CombinedLoss`)**:
-  - Pérdida L1 a nivel de píxeles: $\mathcal{L}_{\text{L1}} = \| y_{\text{pred}} - y_{\text{true}} \|_1$
-  - Pérdida Perceptual basada en VGG-19 (primeras 16 capas de features):
-    $$\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{L1}} + 0.1 \times \mathcal{L}_{\text{perceptual}}$$
-- **Optimizador y Regularización**:
-  - Optimizador Adam ($lr = 0.001$).
-  - `ReduceLROnPlateau` con factor 0.1 y paciencia de 10 épocas.
-  - Early Stopping con paciencia de 5 épocas sin mejora en validación.
-  - Guardado de checkpoints periódicos cada 5 épocas en `checkpoints/checkpoint_epoch_*.pth`, guardado del mejor modelo en `checkpoints/best_model.pth` y guardado final en `checkpoints/model_final.pth`.
+El `state_dict` entrenado (`checkpoints/best_model.pth`) ocupa ~142 MB en `float32`.
 
-### 5. Modelos Adicionales de Soporte
-- **U2-Net (`model_u2net/`)**: Implementación completa de la arquitectura U2-Net y checkpoint `u2net_human_seg.pth` orientado a la segmentación de figuras humanas.
-- **YOLOv8-Seg (`yolov8n-seg.pt`)**: Modelo preentrenado de Ultralytics disponible en la raíz del proyecto para tareas alternativas de segmentación por instancias.
-- **Potrace (`bin/potrace.exe`)**: Utilidad de línea de comandos para transformar bitmaps en trazados de curvas bezier de alta fidelidad.
+### Configuración de entrenamiento
+
+| Parámetro | Valor |
+| :--- | :--- |
+| Resolución de entrada / salida | `512x512` RGB → `512x512` escala de grises |
+| Normalización | `[-1, 1]` (`mean=0.5, std=0.5`) |
+| Función de pérdida | `L1Loss + 0.1 * PerceptualLoss(VGG19[:16])` |
+| Optimizador | `Adam` (`lr = 1e-3`) |
+| Scheduler | `ReduceLROnPlateau(mode="min", factor=0.1, patience=10)` |
+| Batch size / Épocas máx. | `8` / `500` |
+| Early stopping | `patience = 5` sobre pérdida de validación |
+| Checkpoints | Cada `5` épocas (`checkpoints/checkpoint_epoch_<N>.pth`) + `best_model.pth` |
+
+### Data Augmentation
+
+Se aplica de forma sincronizada sobre imagen y máscara usando `albumentations` únicamente en el conjunto de entrenamiento:
+- Rotación aleatoria (`±10°`, `p=0.5`).
+- Transformación afín: escala `(0.9, 1.1)` y traslación `(-5%, +5%)` (`p=0.5`).
+- Variación aleatoria de brillo y contraste (`±15%`, `p=0.5`).
+
+El entrenamiento reanuda automáticamente desde el checkpoint con mayor número de época encontrado en `checkpoints/`.
 
 ---
 
-## Estructura del Proyecto
+## Estructura del repositorio
 
 ```text
 human_silhouette_svg/
 ├── bin/
-│   └── potrace.exe             # Binario ejecutable de Potrace para vectorización
-├── checkpoints/                # Modelos y pesos entrenados de la U-Net
-│   ├── best_model.pth          # Checkpoint con mejor loss de validación
-│   ├── checkpoint_epoch_*.pth  # Checkpoints periódicos de entrenamiento
-│   └── model_final.pth         # Estado del modelo al finalizar las épocas
-├── data/                       # Almacenamiento local de datasets
-│   ├── input_segmentation/     # Imágenes en bruto a segmentar
-│   ├── output_segmentation/    # Máscaras brutas de segmentación
-│   ├── input_train/            # Imágenes de entrenamiento (RGB 512×512)
-│   ├── output_train/           # Siluetas objetivo de entrenamiento
-│   ├── input_val/              # Imágenes de validación
-│   └── preprocessing_state.json # Persistencia del último índice etiquetado
-├── frontend/                   # Interfaz de usuario Web (Single Page App)
-│   ├── index.html              # Estructura HTML5 con Tailwind CSS
-│   └── app.js                  # Lógica cliente (drag & drop, peticiones fetch, render SVG)
-├── model_u2net/                # Arquitectura y pesos de U2-Net
-│   ├── u2net.py                # Definición de capas y bloques RSU de U2-Net
-│   └── u2net_human_seg/
-│       └── u2net_human_seg.pth # Checkpoint de U2-Net para segmentación humana
-├── outputs/                    # Artefactos generados por el pipeline
-│   ├── preprocessing/          # Imágenes intermedias segmentadas y escaladas
-│   ├── U_Net/                  # Predicciones intermedias de la U-Net
-│   ├── postprocessing/         # Imágenes binarizadas y esqueletizadas
-│   └── vectorization/          # Archivos vectoriales finales (.svg)
-├── segment_anything/           # Módulo local de Segment Anything (Meta AI)
-│   ├── modeling/               # Componentes de SAM (Image Encoder, Prompt Encoder, Mask Decoder)
-│   ├── utils/                  # Utilidades y transformaciones geométricas de SAM
-│   ├── build_sam.py            # Constructores de modelos SAM (ViT-H, ViT-L, ViT-B)
-│   ├── predictor.py            # Clase SamPredictor para inferencia
-│   └── sam_vit_h_4b8939.pth    # Checkpoint preentrenado de SAM ViT-H (~2.4 GB)
-├── src/                        # Código fuente principal
-│   ├── config.py               # Rutas base, constantes del proyecto y directorios
-│   ├── utils.py                # Transformaciones torchvision y desnormalización de tensores
-│   ├── preprocessing.py        # Carga de SAM, segmentación (interactiva/auto) y letterboxing
-│   ├── training.py             # Arquitectura U-Net, Dataset, PerceptualLoss y bucle de train
-│   ├── dataset_builder.py      # GUI para etiquetado y construcción asistida de dataset
-│   ├── postprocessing.py       # Limpieza morfológica, umbralizado adaptativo y thinning
-│   ├── vectorization.py        # Enlace con Potrace, detección y simplificación de contornos SVG
-│   ├── main.py                 # Pipeline unificado y punto de entrada de escritorio (CLI/GUI)
-│   └── api.py                  # Servidor backend FastAPI y endpoints REST
-├── yolov8n-seg.pt              # Checkpoint de YOLOv8 Nano Segmentación
-├── requirements.txt            # Dependencias del entorno Python
-└── README.md                   # Documentación detallada del proyecto
+│   └── potrace.exe               # Binario de Potrace para Windows
+├── checkpoints/                  # Pesos de U-Net (best_model.pth, model_final.pth, checkpoints)
+├── data/
+│   ├── input_train/              # Imágenes segmentadas RGB 512x512 (72 muestras actuales)
+│   ├── output_train/             # Trazos objetivo en escala de grises (72 muestras actuales)
+│   ├── input_val/                # Imágenes de validación
+│   ├── output_val/               # Targets de validación (requerido para ejecutar training.py)
+│   ├── input_segmentation/       # Fotos en bruto usadas por dataset_builder.py
+│   └── output_segmentation/      # Targets en bruto usados por dataset_builder.py
+├── frontend/
+│   ├── index.html                # Interfaz web (Tailwind CSS via CDN)
+│   └── app.js                    # Lógica de carga drag & drop, llamada a /api/vectorize y descarga
+├── model_u2net/                  # Artefacto de pruebas previas de segmentación (no usado en pipeline)
+├── outputs/                      # Salidas intermedias (preprocessing, U_Net, postprocessing) y SVGs
+├── segment_anything/             # Código fuente de SAM (Meta AI) + checkpoint sam_vit_h_4b8939.pth
+├── src/
+│   ├── api.py                    # Servidor FastAPI y servicio de archivos del frontend
+│   ├── config.py                 # Rutas centralizadas y detección de Potrace
+│   ├── dataset_builder.py        # Herramienta GUI para generar pares de entrenamiento con SAM
+│   ├── main.py                   # Pipeline unificado (run_pipeline) y entrada de escritorio
+│   ├── postprocessing.py         # Contraste, binarización adaptativa, limpieza y thinning
+│   ├── preprocessing.py          # Carga de SAM, segmentación (interactiva/auto) y letterboxing
+│   ├── training.py               # Dataset, arquitectura U-Net, CombinedLoss y loop de entrenamiento
+│   ├── utils.py                  # Transformaciones de entrada/salida y desnormalización
+│   └── vectorization.py          # Integración con Potrace, contornos y escritura SVG
+├── yolov8n-seg.pt                # Peso de pruebas previas de segmentación (no usado en pipeline)
+└── requirements.txt
 ```
 
----
-
-## Instalación y Requisitos
-
-### Requisitos Previos
-- **Sistema Operativo**: Windows 10/11 o Linux.
-- **Python**: 3.10 a 3.12 recomendado.
-- **Aceleración GPU (Opcional pero muy recomendada)**: Tarjeta gráfica NVIDIA con controladores actualizados y soporte para CUDA 12.1.
-- **Potrace**: En Windows el binario se incluye en `bin/potrace.exe`. En entornos Linux, asegurarse de disponer de Potrace en el PATH del sistema o configurar su ruta en `src/config.py`.
-
-### Instalación de Dependencias
-
-1. **Crear y activar un entorno virtual**:
-   ```bash
-   python -m venv venv
-
-   # En Windows:
-   venv\Scripts\activate
-
-   # En Linux / macOS:
-   source venv/bin/activate
-   ```
-
-2. **Instalar los paquetes requeridos**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-   *Nota de dependencias clave*:
-   - PyTorch con soporte CUDA (`torch`, `torchvision`, `torchaudio`).
-   - OpenCV (`opencv-contrib-python==4.10.0.84`) para operaciones de ventana y módulo `ximgproc`.
-   - `albumentations` para aumento de datos durante el entrenamiento.
-   - `fastapi` y `uvicorn` para el servicio web.
-   - `numpy<2.0.0` para garantizar compatibilidad con librerías de visión y aprendizaje profundo.
-   - `ultralytics` para modelos complementarios YOLO.
-
-### Pesos y Checkpoints Requeridos
-Asegurarse de que los archivos de pesos estén ubicados en sus rutas correspondientes:
-- **SAM ViT-H**: `segment_anything/sam_vit_h_4b8939.pth`
-- **U-Net Best Model**: `checkpoints/best_model.pth`
-- **U2-Net (Opcional)**: `model_u2net/u2net_human_seg/u2net_human_seg.pth`
+> Nota: `model_u2net/` y `yolov8n-seg.pt` corresponden a experimentos iniciales de segmentación previos a estandarizar en SAM ViT-H; el pipeline activo no los importa.
 
 ---
 
-## Guía de Ejecución
+## Instalación
 
-### 1. Levantar el Servicio Web
-Para iniciar el servidor FastAPI y acceder a la interfaz web:
+### Requisitos previos
+
+- **Python:** 3.10 – 3.12 (recomendado por compatibilidad con PyTorch y `opencv-contrib-python`).
+- **GPU (opcional, recomendada para entrenamiento):** NVIDIA con soporte CUDA 12.1.
+- **Potrace:**
+  - En Windows se usa `bin/potrace.exe` automáticamente.
+  - En Linux/macOS debe estar disponible en el `PATH` (`sudo apt install potrace` / `brew install potrace`); `src/config.py` lo detecta automáticamente con `shutil.which("potrace")`.
+
+### Dependencias
+
+```bash
+python -m venv venv
+
+# Linux / macOS
+source venv/bin/activate
+
+# Windows
+venv\Scripts\activate
+
+pip install -r requirements.txt
+```
+
+Si vas a levantar la interfaz web (`src/api.py`), instala además las dependencias del servidor que no están declaradas en `requirements.txt`:
+
+```bash
+pip install fastapi uvicorn python-multipart pillow
+```
+
+### Pesos necesarios
+
+Antes de ejecutar inferencia, verifica que existan ambos archivos:
+
+1. **SAM ViT-H:** `segment_anything/sam_vit_h_4b8939.pth` (descargable desde el repositorio oficial de [Segment Anything](https://github.com/facebookresearch/segment-anything#model-checkpoints)).
+2. **U-Net entrenada:** `checkpoints/best_model.pth` (generado por `src/training.py`).
+
+---
+
+## Uso
+
+### 1. Servidor web y API REST
+
+Levanta FastAPI cargando U-Net y SAM una sola vez al inicio:
 
 ```bash
 python src/api.py
 ```
-o mediante Uvicorn directamente:
+
+O con Uvicorn directamente:
+
 ```bash
 uvicorn src.api:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-Una vez iniciado:
-- Abre el navegador en: `http://127.0.0.1:8000`
-- Documentación interactiva de la API (Swagger UI): `http://127.0.0.1:8000/docs`
+- Interfaz web: `http://127.0.0.1:8000`
+- Documentación OpenAPI (Swagger): `http://127.0.0.1:8000/docs`
 
-En la web podés arrastrar una foto; el backend la segmentará automáticamente con SAM, la procesará con U-Net, realizará el postprocesamiento morfológico y devolverá el SVG en pantalla listo para descargar.
+Ejemplo de llamada directa al endpoint de inferencia:
 
-### 2. Ejecutar la Aplicación de Escritorio
-Para utilizar el pipeline local con selector de archivos y segmentación manual interactiva:
+```bash
+curl -X POST "http://127.0.0.1:8000/api/vectorize" \
+  -F "file=@ruta/a/foto.jpg"
+```
+
+Respuesta:
+
+```json
+{
+  "status": "success",
+  "filename": "silhouette_a1b2c3d4.svg",
+  "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" ...>...</svg>"
+}
+```
+
+### 2. Modo de escritorio (segmentación interactiva)
+
+Útil cuando la foto tiene varios sujetos o el fondo complica la segmentación automática:
 
 ```bash
 python src/main.py
 ```
-1. Se abrirá una ventana para seleccionar la imagen deseada.
-2. Si la segmentación es interactiva, hacé clic sobre el cuerpo de la persona en la ventana de OpenCV.
-3. Presioná `S` para confirmar la máscara.
-4. El proceso generará el archivo SVG en `outputs/vectorization/` y guardará los pasos intermedios en `outputs/`.
 
-### 3. Construir Dataset de Pares
-Para preparar nuevas muestras de entrenamiento de manera asistida:
+1. Selecciona la imagen en el diálogo de Tkinter.
+2. En la ventana de OpenCV, haz **clic izquierdo** sobre las regiones de la persona para ir sumando máscaras con SAM.
+   - `Z`: deshacer la última máscara.
+   - `S`: confirmar máscara y continuar el pipeline.
+   - `ESC`: cancelar.
+3. El resultado final se guarda en `outputs/vectorization/<nombre>.svg` y las imágenes de depuración de cada etapa en `outputs/{preprocessing,U_Net,postprocessing}/`.
+
+### 3. Construcción de pares de entrenamiento
 
 ```bash
 python src/dataset_builder.py
 ```
-- Permite seleccionar la imagen de partida, aplicar SAM iterativamente y almacenar de manera sincronizada la imagen de entrada y su máscara correspondiente en `data/input_train/` y `data/output_train/`.
 
-### 4. Entrenar la Red U-Net
-Para entrenar o ajustar la U-Net sobre el conjunto de datos preparado:
+Guarda pares sincronizados en `data/input_train/` y `data/output_train/` con numeración incremental (`imagen_1.png`, `imagen_2.png`, ...) manteniendo el último índice procesado en `data/preprocessing_state.json`.
+
+### 4. Entrenamiento de la U-Net
+
+Asegúrate de tener pares `.png` con nombres idénticos en `data/input_train/`, `data/output_train/`, `data/input_val/` y `data/output_val/` (en `input_val` solo deben existir `.png` válidos con su par correspondiente en `output_val`):
 
 ```bash
 python src/training.py
 ```
-- Lee las imágenes desde `data/input_train/` y `data/output_train/`.
-- Aplica las técnicas de Data Augmentation configuradas.
-- Valida con `data/input_val/` y `data/output_val/`.
-- Guarda checkpoints automáticos y almacena el mejor modelo en `checkpoints/best_model.pth`.
 
 ---
 
-## Proyección de Despliegue en la Nube (AWS)
+## Limitaciones conocidas y próximos pasos
 
-El diseño desacoplado del proyecto permite una migración y escalabilidad directa sobre la infraestructura de Amazon Web Services:
+Puntos concretos identificados en el estado actual del código para la siguiente iteración:
 
-1. **Amazon S3 (`s3://silhouette-project/`)**:
-   - `dataset/`: Almacenamiento centralizado y versionado de pares de entrenamiento (`input_train/`, `output_train/`).
-   - `models/`: Repositorio de artefactos (`sam_vit_h_4b8939.pth`, `best_model.pth`).
-   - `results/`: Archivo histórico de resultados vectoriales y analíticos.
-
-2. **AWS SageMaker**:
-   - Ejecución de trabajos de entrenamiento distribuidos (*SageMaker Training Jobs*) aprovechando instancias GPU dedicadas (`ml.g4dn` / `ml.g5`).
-   - Registro y linaje de modelos mediante *Model Registry*.
-
-3. **Amazon EC2 / ECS**:
-   - Despliegue del contenedor con el servidor **FastAPI** (`src/api.py`), modelos pre-cargados en GPU y Potrace para atención de solicitudes web de baja latencia.
+- **Acoplamiento de arquitectura y entrenamiento:** `UNet` está definida dentro de `src/training.py`, lo que obliga a `src/main.py` a importar dependencias de entrenamiento (`albumentations`, `vgg19`) en inferencia. Conviene extraer `UNet` y sus bloques a `src/model.py`.
+- **Conflicto entre scheduler y early stopping:** `EARLY_STOPPING_PATIENCE = 5` detiene el entrenamiento antes de que `ReduceLROnPlateau(patience=10)` pueda reducir el learning rate. Hay que invertir esa relación (por ejemplo, `scheduler.patience = 4` y `early_stopping = 10`).
+- **Dispositivo de SAM y prompts automáticos:** `load_sam()` en `src/preprocessing.py` no mueve el modelo a GPU (`sam.to(device)`), por lo que corre en CPU incluso con CUDA disponible. Además, el modo automático inyecta 3 puntos fijos sobre el eje central asumiendo una sola persona centrada; integrar un detector de personas (como YOLOv8) para pasar un *bounding box* como prompt a SAM mejoraría la robustez en encuadres descentrados.
+- **Concurrencia y calidad vectorial en `src/vectorization.py`:** actualmente Potrace se usa solo como suavizado intermedio (`--pgm`) y los trazados SVG finales son polilíneas (`M`, `L`, `Z`). Exportar curvas Bézier cúbicas directamente desde Potrace (`potrace -s`) reduciría nodos y mejoraría la suavidad para corte láser; además, los archivos temporales deberían crearse con `tempfile` para evitar colisiones ante peticiones concurrentes en la API.
+- **Tamaño del dataset y reproducibilidad:** con 72 pares de entrenamiento la generalización en poses inusuales u oclusiones es limitada. Ampliar el dataset, fijar semillas aleatorias, agregar métricas cuantitativas en validación (IoU / Dice sobre trazos binarizados) y completar `requirements.txt` con las dependencias de FastAPI son prioridades directas.
